@@ -1,4 +1,16 @@
-.venv/
+# --- Python ---
 __pycache__/
+*.py[cod]
+*$py.class
+.venv/
 *.pyc
 .vscode/
+
+# --- Rust / Cargo ---
+/sizer_core/target/
+
+# --- Generated Output & Local Configs ---
+model_config.json
+*.log
+.DS_Store
+Thumbs.db
