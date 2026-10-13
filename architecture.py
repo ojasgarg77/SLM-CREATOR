@@ -3,9 +3,38 @@ import subprocess
 import json
 import os
 import sys
+import csv
+import io
 
 print("HARDWARE ARCHITECTURE CHECKER AND ANALYZER\n")
+
+def ask_training_time():
+    while True:
+        training_time=input("Please input the time u have for training the model (in hours)--").strip()
+        try:
+            time=int(training_time)
+            while True:
+                if time <=0:
+                    print("Training time must be greater than 0\n")
+                    training_time=input("Please input the time u have for training the model (in hours)--").strip()
+                    time=int(training_time)
+                else:
+                    break
+            print(f"Your chosen time for training is: {time} hours.")
+            while True:
+                surity_check=input(f"Are you sure u want to allocate {time} hours for model training? (y/n) ").lower().strip()
+                if surity_check in ("y","yes"):
+                    return time
+                elif surity_check in ("n","no"):
+                    break
+                else:
+                    print("Invalid input.Please enter 'y' or 'n'\n")
+        except ValueError:
+            print("Please input a valid time limit.")
+
+
 def scan_hardware():
+    targeted_gpus=[]
     run_settings={
         "check":True,
         "stdout":subprocess.PIPE,
@@ -29,8 +58,7 @@ def scan_hardware():
                 gpu=gpu_conditions[0]
                 vram=int(gpu_conditions[1])
                 print(f"GPU is {gpu}.The VRAM is {vram}")
-            print("CUDA ARCHITECTURE DETECTED.")
-            return "cuda"
+                targeted_gpus.append(("cuda", vram))
         except subprocess.SubprocessError:
             pass
     if shutil.which("amd-smi"):
@@ -47,31 +75,46 @@ def scan_hardware():
                 else:
                     vram_mib=vram_amd
                 print(f"GPU is {gpu_amd}.The VRAM is {vram_mib}")
-            return "modern-rocm"
+                targeted_gpus.append(("modern-rocm", vram_mib))
         except(subprocess.SubprocessError,KeyError,json.JSONDecodeError):
             pass   
     if shutil.which("rocm-smi") or shutil.which("rocminfo"):
         try:
             command_amd_legacy=["rocm-smi", "--showproductname", "--showmeminfo", "vram", "--csv"]
             output_cmd_amd_legacy=subprocess.run(command_amd_legacy, **run_settings)
-            output_amd_legacy=output_cmd_amd_legacy.stdout.splitlines()
-            for line in output_amd_legacy[1:]:
-                if line.strip():
-                    parts=line.split(",")
-                    gpu_amd_legacy=parts[3]
-                    vram_amd_legacy=int(parts[1])
+            csv_data=output_cmd_amd_legacy.stdout.strip()
+            reader=csv.DictReader(io.StringIO(csv_data))
+            for row in reader:
+                gpu_amd_legacy=row.get("Device Name") or row.get("card0") or "Unknown AMD GPU"
+                vram_raw=row.get("VRAM Total Memory (B)")
+                if vram_raw and vram_raw.isdigit():
+                    vram_amd_legacy=int(vram_raw)
                     if vram_amd_legacy>1_000_000:
                         vram_legacy_mib=vram_amd_legacy//(1024*1024)
                     else:
                         vram_legacy_mib=vram_amd_legacy
                     print(f"GPU is {gpu_amd_legacy}.The VRAM is {vram_legacy_mib}")
+                    targeted_gpus.append(("legacy-rocm", vram_legacy_mib))
             print("ROCm ARCHITECTURE DETECTED.")
-            return "legacy-rocm"
         except (subprocess.SubprocessError,json.JSONDecodeError):
             pass    
-    return "cpu"
-    
+    if len(targeted_gpus)==0:
+        return ("cpu", 0)
+    if len(targeted_gpus)==1:
+        return targeted_gpus[0]
+    if len(targeted_gpus)>=2:
+        for index,(architecture,vram) in enumerate(targeted_gpus):
+            print(f"[{index}] Architecture:{architecture}, VRAM:{vram}MB")
+        while True:
+            try:
+                gpu_choice=int(input("SELECT A GPU INDEX NUMBER FOR TRAINING:\n"))
+                if 0 <= gpu_choice < len(targeted_gpus):
+                    return targeted_gpus[gpu_choice]
+                print("INVALID INDEX NUMBER. PLEASE SELECT A VALID INDEX.")
+            except ValueError:
+                print("PLEASE ENTER A VALID NUMBER.")
 detected_hardware=scan_hardware()
+allocated_time=ask_training_time()
 
 def identify_os():
     base_path=os.path.join("sizer_core", "target", "release", "sizer_core")
@@ -79,7 +122,7 @@ def identify_os():
         return base_path+".exe"
     return base_path
     
-if detected_hardware=="cpu":
+if detected_hardware[0]=="cpu":
     print("NO DEDICATED AI-GPU DRIVERS DETECTED.")
 else:
     sizer_binary=identify_os()
@@ -87,11 +130,10 @@ else:
         os.chmod (sizer_binary, 0o755)
     while True:
         try:
-            subprocess.run([sizer_binary],check=True)
-            with open("model_config.json","r") as f:
-                config=json.load(f)
-            print(f"Target Parameters:{config['total_params']}")
+            result=subprocess.run([sizer_binary]
+            ,input=f"{allocated_time}\n,{detected_hardware[1]}\n",text=True,check=True,capture_output=True)
+            total_params=result.stdout.strip()
             break
         except(subprocess.CalledProcessError,FileNotFoundError):
-            print("\nENSURE THAT U HAVE FOLLOWED ALL INSTRUCTIONS AND HAVE RUST INSTALLED.")
+            print("\nENSURE THAT U HAVE FOLLOWED ALL INSTRUCTIONS AND HAVE RUST INSTALLED AND (sizer_core) SET UP.")
             input("AFTER COMPLETING PRESS ENTER:")

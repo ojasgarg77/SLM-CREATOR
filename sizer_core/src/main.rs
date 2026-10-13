@@ -1,13 +1,15 @@
-// src/main.rs
-use serde::{Serialize, Deserialize};
+use std::io;
 
-#[derive(Serialize, Deserialize)]
-struct Dummy {
-    id: u32,
+fn read_python_line()->String{
+    let mut buf=String::new();
+    io::stdin()
+        .read_line(&mut buf)
+        .expect("Failed to read line");
+    buf.trim().to_string()
 }
 
 fn main() {
-    let dummy = Dummy { id: 1 };
-    let json = serde_json::to_string(&dummy).unwrap();
-    println!("{}", json);
+    let mut time_compute=read_python_line();
+    let mut vram_compute=read_python_line();
+    println!("{time_compute}/{vram_compute}");
 }
