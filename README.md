@@ -9,7 +9,7 @@ It is an open-ended personal learning project (roughly a 5-6 month effort), buil
 ## Planned pipeline
 
 1. **Hardware detection**: detect an NVIDIA GPU, a modern or legacy AMD GPU, or fall back to CPU-only. Collect GPU name and total VRAM.
-2. **Sizing**: a Rust program (`sizer_core`) takes the detected hardware and the user's training-time budget and works out a feasible parameter count (capped at 100M). Sizing is deterministic arithmetic (memory fit and compute time), not an LLM guess.
+2. **Sizing**: a Rust program (`sizer_core`) takes the detected hardware and the user's training-time budget and works out a feasible parameter count (capped at 100M). Sizing is deterministic arithmetic (a memory limit and a compute-time limit, taking the smaller), not an LLM guess.
 3. **Specialization matching**: the user describes what they want the model specialized in, and an LLM matches that to one of several pre-curated datasets. The user can override the pick.
 4. **Data ingestion**: a Rust pipeline handles tokenizing, batching, and streaming training data into the PyTorch training loop.
 5. **Training**: plain backpropagation for v1. A Forward-Forward + backprop hybrid is a possible experimental mode much later, not the default.
@@ -17,8 +17,11 @@ It is an open-ended personal learning project (roughly a 5-6 month effort), buil
 
 ## Current status
 
-- ✅ **Hardware detection** (`architecture.py`): detects NVIDIA (`nvidia-smi`), modern AMD (`amd-smi`), legacy AMD (`rocm-smi`/`rocminfo`), or CPU-only. Tested live on a CPU-only machine; the GPU paths have been tested against mock tool output only.
-- 🔧 **Sizing** (`sizer_core`, Rust): in progress. The Python-to-Rust hand-off (passing hardware info and time budget in, reading `model_config.json` back) is being designed, and the sizing formulas are still to be written.
+- ✅ **Hardware detection** (`architecture.py`): detects NVIDIA (`nvidia-smi`), modern AMD (`amd-smi`), legacy AMD (`rocm-smi`/`rocminfo`), or CPU-only. If several GPUs are found, the user picks one. Also asks for the training-time budget in hours. Tested live on a CPU-only machine; the GPU paths have been tested against mock tool output only.
+- 🔧 **Sizing** (`sizer_core`, Rust): in progress.
+  - Python sends the training hours and the VRAM (MiB) to the Rust program over standard input, one value per line. The Rust side currently reads and echoes them back.
+  - Next: parse the inputs, write the memory-limit and time-limit functions, and return the result to Python over standard output.
+  - Planned: measure the machine's real speed (FLOPs per second) with a matrix-multiplication benchmark and pass it in as a third value.
 - ⏳ Dataset specialization matching: not started.
 - ⏳ Rust ingestion pipeline: not started.
 - ⏳ Training loop: not started.
@@ -32,6 +35,8 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+The Python code currently uses only the standard library, so `requirements.txt` is empty for now. PyTorch will be added once the benchmark and training code arrive. Note that the correct PyTorch build depends on your hardware (NVIDIA, AMD, or CPU-only), so use the selector on the PyTorch website if the default `pip install torch` does not match your machine.
+
 To build the sizing program (requires [Rust](https://www.rust-lang.org/tools/install)):
 
 ```bash
@@ -39,7 +44,11 @@ cd sizer_core
 cargo build --release
 ```
 
-Note: the correct PyTorch build depends on your hardware (NVIDIA, AMD, or CPU-only). If the default `pip install torch` does not match your machine, use the selector on the PyTorch website.
+Then run the detector from the project root:
+
+```bash
+python architecture.py
+```
 
 ## Requirements
 
