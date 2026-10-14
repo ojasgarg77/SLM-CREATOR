@@ -5,26 +5,61 @@ import os
 import sys
 import csv
 import io
+import torch
+import time
 
 print("HARDWARE ARCHITECTURE CHECKER AND ANALYZER\n")
+
+def compute_TFLOPS(architecture_type,num_runs=10):
+    if architecture_type=="cpu":
+        print("\nSkipped TFLOPS calculation due to absence of GPU.")
+        return 0.0
+    n=4096
+    tflops_computed_list=[]
+
+    if architecture_type in ("cuda","modern-rocm","legacy-rocm"):
+        device="cuda"
+    else:
+        device="cpu"
+
+    matrix=torch.randn(n,n,device=device)
+    _=matrix @ matrix
+    if device=="cuda":
+        torch.cuda.synchronize()    
+
+
+    for i in range(1,num_runs+1):
+        start=time.perf_counter()
+        matrix_multiplied=matrix @ matrix
+        if device=="cuda":
+            torch.cuda.synchronize()
+        end=time.perf_counter()
+        elapsed_time=end-start
+        work=2*(n**3)
+        tflops=work/(elapsed_time*(10**12))
+        print(f"Achieved TFLOPS for run {i}--{tflops:.2f}\n")
+        tflops_computed_list.append(tflops)
+    avg_tflops=sum(tflops_computed_list)/len(tflops_computed_list)
+    print(f"Average TFLOPS computed is--{avg_tflops}")
+    return avg_tflops
 
 def ask_training_time():
     while True:
         training_time=input("Please input the time u have for training the model (in hours)--").strip()
         try:
-            time=int(training_time)
+            input_time=int(training_time)
             while True:
-                if time <=0:
+                if input_time<=0:
                     print("Training time must be greater than 0\n")
                     training_time=input("Please input the time u have for training the model (in hours)--").strip()
-                    time=int(training_time)
+                    input_time=int(training_time)
                 else:
                     break
-            print(f"Your chosen time for training is: {time} hours.")
+            print(f"Your chosen time for training is: {input_time} hours.")
             while True:
-                surity_check=input(f"Are you sure u want to allocate {time} hours for model training? (y/n) ").lower().strip()
+                surity_check=input(f"Are you sure u want to allocate {input_time} hours for model training? (y/n) ").lower().strip()
                 if surity_check in ("y","yes"):
-                    return time
+                    return input_time
                 elif surity_check in ("n","no"):
                     break
                 else:
@@ -125,15 +160,18 @@ def identify_os():
 if detected_hardware[0]=="cpu":
     print("NO DEDICATED AI-GPU DRIVERS DETECTED.")
 else:
+    tflops_computed=compute_TFLOPS(detected_hardware[0])
     sizer_binary=identify_os()
     if sys.platform !="win32" and os.path.exists(sizer_binary):
         os.chmod (sizer_binary, 0o755)
     while True:
         try:
             result=subprocess.run([sizer_binary]
-            ,input=f"{allocated_time}\n,{detected_hardware[1]}\n",text=True,check=True,capture_output=True)
+            ,input=f"{detected_hardware[1]}\n{allocated_time}\n{tflops_computed}\n",text=True,check=True,capture_output=True)
             total_params=result.stdout.strip()
+            print(f"MAXIMUM THEORETICAL PARAMETERS FOR THE MODEL IS--{total_params}")
             break
         except(subprocess.CalledProcessError,FileNotFoundError):
             print("\nENSURE THAT U HAVE FOLLOWED ALL INSTRUCTIONS AND HAVE RUST INSTALLED AND (sizer_core) SET UP.")
             input("AFTER COMPLETING PRESS ENTER:")
+# sizer_core stdin contract: line 1 = VRAM (MiB), line 2 = hours, line 3 = tflops_computed
