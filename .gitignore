@@ -1,13 +1,9 @@
-# Python
 __pycache__/
 *.py[cod]
 *$py.class
 .venv/
- 
-# Rust build output (Cargo.lock is kept on purpose: sizer_core is a binary)
 /sizer_core/target/
- 
-# Editor / OS
 .vscode/
 .DS_Store
 Thumbs.db
+.dataset/
