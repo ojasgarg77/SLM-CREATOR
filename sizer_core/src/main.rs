@@ -3,7 +3,8 @@ use std::process;
 
 const MIB_TO_BYTES:u64=1_048_576;
 const BYTES_PER_PARAM:u64=20;
-const TFLOPS_EFFICIENCY_FACTOR:f64=0.4;
+const TFLOPS_EFFICIENCY_FACTOR:f64=0.3;
+const MAX_PARAMS:f64=100_000_000.0;
 
 fn read_python_line()->String{
     let mut buf=String::new();
@@ -14,14 +15,18 @@ fn read_python_line()->String{
 }
 
 fn main() {
+    let mut limiting_factors=vec![];
+    limiting_factors.push(MAX_PARAMS);
     let vram_computed_params=params_from_vram();
+    limiting_factors.push(vram_computed_params as f64);
     let time_computed_params=params_from_time();
-    if (vram_computed_params as f64)>time_computed_params{
-        println!("{}",time_computed_params as u64)
-    }
-    else{
-        println!("{}",vram_computed_params as u64)
-    }
+    limiting_factors.push(time_computed_params);
+    let min_limiting_factor=limiting_factors.iter()
+    .min_by(|a,b| a.partial_cmp(b).unwrap())
+    .copied()
+    .unwrap_or(0.0);
+    println!("{}",min_limiting_factor as u64)
+
 }
 
 fn params_from_vram()->u64{
@@ -55,7 +60,7 @@ fn params_from_time()->f64{
             eprintln!("Failed to parse time string.");
             process::exit(1); 
         }
-    };
+    }; 
     let total_seconds=time_compute*3600.0;
     let total_flops=tflops_compute*1_000_000_000_000.0*total_seconds*TFLOPS_EFFICIENCY_FACTOR;
     let time_params=(total_flops/120.0).sqrt();
@@ -64,6 +69,5 @@ fn params_from_time()->f64{
 
 // In deep learning a transformer model requires 6 flops per param for every token.
 // The formula for training=> total flops=6*model params*total no. of training tokens.
-// Acoording to the chinchilla paper a model works best when=> total no. of traing tokens=20*model_params.
-// Hence the used formula in my code is going to be n(no. of training tokens)= (flops/120) to the power of half.
-
+// According to the chinchilla paper a model works best when=> total no. of training tokens=20*model_params.
+// Hence the used formula in my code is going to be n(total no. of params)= (flops/120) to the power of half
