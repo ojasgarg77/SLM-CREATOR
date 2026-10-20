@@ -6,4 +6,5 @@ __pycache__/
 .vscode/
 .DS_Store
 Thumbs.db
-.dataset/
+dataset/
+.env

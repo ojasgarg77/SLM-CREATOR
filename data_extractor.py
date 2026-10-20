@@ -1,6 +1,7 @@
 import pymupdf
 import unicodedata
 from pathlib import Path
+
 LIGATURE_DICTIONARY={
     "\ufb00":"ff",
     "\ufb01":"fi",
@@ -13,30 +14,60 @@ LIGATURE_DICTIONARY={
     "\u2020":"",
     "\u2021":""
 } 
-def find_files():
+def find_pdf_files():
     pdf_list=[]
-    base_path=Path(__file__).parent
-    if not (base_path/"dataset").is_dir():
+    base_path=Path(__file__).parent/"dataset"/"pdfs"
+    if not base_path.is_dir():
         print("THE DIRECTORY DOES NOT EXIST.")
         return pdf_list
-    for file_path in sorted((base_path/"dataset").glob("*.pdf")):
+    for file_path in sorted(base_path.glob("*.pdf")):
         print(f"PDF {file_path.name} found.")
         pdf_list.append(file_path)
     return pdf_list
 
-files=find_files()  
-output_counts={}  
-for path in files:
-    count=0
-    with pymupdf.open(path) as document:
-        all_text=""
-        for page in document:
-            all_text+=page.get_text()
+def get_english_tokens():
+    english_txt_files=[]
+    base_path=Path(__file__).parent /"dataset" / "english_dataset"
+    for english_files in sorted(base_path.glob("*.txt")):
+        print(f"TXT {english_files.name} found.")
+        english_txt_files.append(english_files)
+    return english_txt_files
 
+def total_char_count_dic():  
+    output_counts={}  
+    files=find_pdf_files()
+    for path in files:
+        count=0
+        with pymupdf.open(path) as document:
+            all_text=""
+            for page in document:
+                all_text+=page.get_text()
+            
+            for fancy,plain in LIGATURE_DICTIONARY.items():
+                all_text=all_text.replace(fancy,plain)
+            
+            for line in all_text.splitlines():
+                count+=len(line)
+        output_counts[path.name]=count
+
+    english_files=get_english_tokens()
+    for path in english_files:
+        count=0
+        all_text=path.read_text(encoding="utf-8",errors="ignore")
         for fancy,plain in LIGATURE_DICTIONARY.items():
             all_text=all_text.replace(fancy,plain)
-        
         for line in all_text.splitlines():
             count+=len(line)
-    output_counts[path.name]=count
-print(output_counts)
+        output_counts[path.name]=count
+
+    return output_counts
+
+def main():
+    dataset_files_and_values=total_char_count_dic()
+    total_char_count=int(sum(dataset_files_and_values.values()))
+    total_dataset_tokens=total_char_count//4
+    print(f"TOTAL TOKENS IN THE DATASET IS {total_dataset_tokens}")
+    return total_dataset_tokens
+
+if __name__=="__main__":
+    total_tokens=main()

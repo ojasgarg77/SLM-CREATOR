@@ -158,28 +158,33 @@ def identify_os():
     if sys.platform=="win32":
         return base_path+".exe"
     return base_path
+
+def dataset_tokens():
+    import data_extractor
+    return data_extractor.main()
     
 if detected_hardware[0]=="cpu":
     print("NO DEDICATED AI-GPU DRIVERS DETECTED.")
 else:
     tflops_computed=compute_TFLOPS(detected_hardware[0])
+    total_dataset_tokens=dataset_tokens()
     sizer_binary=identify_os()
     if sys.platform !="win32" and os.path.exists(sizer_binary):
         os.chmod (sizer_binary, 0o755)
     while True:
         try:
             result=subprocess.run([sizer_binary]
-            ,input=f"{detected_hardware[1]}\n{allocated_time}\n{tflops_computed}\n",text=True,check=True,capture_output=True)
+            ,input=f"{detected_hardware[1]}\n{allocated_time}\n{tflops_computed}\n{total_dataset_tokens}\n",text=True,check=True,capture_output=True)
             total_params=int(result.stdout.strip())
             print(f"MAXIMUM THEORETICAL PARAMETERS FOR THE MODEL IS--{total_params}")
             if total_params==100_000_000:
                 print(f"\nMAXIMUM LIMIT FOR THE PROGRAM REACHED-{total_params}")
             break
         except FileNotFoundError:
-            print("\nENSURE THAT U HAVE FOLLOWED ALL INSTRUCTIONS, HAVE RUST INSTALLED AND (sizer_core) SET UP.")
+            print("\nENSURE THAT U HAVE FOLLOWED ALL INSTRUCTIONS, HAVE RUST INSTALLED AND (sizer_core) SET UP AND DATASET SET UP.")
             input("AFTER COMPLETING PRESS ENTER:")
         except subprocess.CalledProcessError as eprintln_error:
             print("EXIT CODE", eprintln_error.returncode)
             print("RUST SIDE ERROR", eprintln_error.stderr)
             break
-# sizer_core stdin contract: line 1 = VRAM (MiB), line 2 = hours, line 3 = tflops_computed
+# sizer_core stdin contract: line 1 = VRAM (MiB), line 2 = hours, line 3 = tflops_computed line 4 = total dataset tokens.

@@ -1,2 +1,4 @@
 torch
 pymupdf
+datasets
+python-dotenv
