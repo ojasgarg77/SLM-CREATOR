@@ -8,7 +8,7 @@ The v1 target is a model hyperspecialized in **neural networks**, built for my o
 
 ## About this project
 
-This is an open-ended personal learning project (roughly a 5-6 month effort). I am learning by building: **the entire codebase is handwritten by me**, piece by piece. AI is used as a tutor for explanations and concepts, not as a source of finished code.
+This is an open-ended personal learning project (roughly a 5-6 month effort, with no fixed deadline). I am learning by building: **the entire codebase is handwritten by me**, piece by piece. AI is used as a tutor for explanations and concepts, not as a source of finished code.
 
 I do not own a GPU. The GPU code paths (NVIDIA, modern AMD, legacy AMD) cannot be run on my machine, so for GPU edge cases I rely on AI-described outputs (for example, what the vendor tools would print on various hardware) rather than AI-written code, and I test my parsing against mock tool output.
 
@@ -37,8 +37,10 @@ I do not own a GPU. The GPU code paths (NVIDIA, modern AMD, legacy AMD) cannot b
   - Example check by hand: 6144 MiB, 2 hours, 10.5 TFLOPS and 11,116,109 tokens give about 2.2M parameters, so data is the tightest limit.
   - To do: split reading from computing in Rust so the math can be unit-tested, validate the values Python sends, handle a failed sizer run cleanly on the Python side (the result variable is left unset), and measure real memory per parameter on the target GPU.
 - 🔧 **Data collection and extraction**:
-  - `download_data.py`: streams the first 500,000 sentences of a cleaned BookCorpus dataset from Hugging Face into `dataset/english_dataset/english_data.txt` (about 41.5M characters). This is general English fiction, already lowercase, and is meant as a base for English, not as neural-network content.
-  - `data_extractor.py`: finds every PDF in `dataset/pdfs/` and every text file in `dataset/english_dataset/`, extracts the PDF text with PyMuPDF, fixes typographic ligatures (such as "ﬁ" to "fi"), removes footnote markers, counts characters, and estimates tokens at 4 characters per token. `main()` returns the total so `architecture.py` can import it. Current total: about 11.1M tokens (the 7 PDFs are about 0.7M of that).
+  - `download_english_data.py`: streams the first 500,000 sentences of a cleaned BookCorpus dataset from Hugging Face into `dataset/english_dataset/english_dataset.txt` (about 41.5M characters). It skips the download if the file already exists. This is general English fiction, already lowercase, and is meant as a base for English, not as neural-network content.
+  - `download_arxiv_data.py`: searches arXiv for papers matching a query (currently `cs.LG` papers about "neural networks", 5 results by default) and downloads their PDFs into `dataset/arxiv_pdfs/`. It sanitizes file names, skips files that already exist, and deletes corrupt or empty downloads. Written but not yet scaled up.
+  - `data_extractor.py`: finds every PDF in `dataset/pdfs/` and every text file in `dataset/english_dataset/`, extracts the PDF text with PyMuPDF, fixes typographic ligatures (such as "ﬁ" to "fi"), removes footnote markers, counts characters, and estimates tokens at 4 characters per token. `main()` returns the total so `architecture.py` can import it. Last measured total: about 11.1M tokens (the 7 hand-picked PDFs are about 0.7M of that).
+  - To do (wiring): the extractor does not read `dataset/arxiv_pdfs/` yet, so downloaded arXiv papers are not counted until that folder is added (or the PDFs are moved into `dataset/pdfs/`).
   - To do (cleaning): lowercase the PDF text to match the English data, normalize the spacing around punctuation in the English data, drop ebook boilerplate and URL lines, share one cleaning function between both sources, keep paragraph breaks in PDFs, and handle words split across lines by hyphens.
   - To do (data): collect much more on-topic neural-network text, because on-topic text is only a small share of the current mix.
 - ⏳ Dataset specialization matching: not started.
@@ -54,7 +56,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-`requirements.txt` contains `torch` (the TFLOPS benchmark), `pymupdf` (PDF extraction), `datasets` and `python-dotenv` (the download script). The correct PyTorch build depends on your hardware (NVIDIA, AMD, or CPU-only), so use the selector on the PyTorch website if the default `pip install torch` does not match your machine.
+`requirements.txt` contains `torch` (the TFLOPS benchmark), `pymupdf` (PDF extraction), `datasets` and `python-dotenv` (the English download), and `arxiv` and `requests` (the arXiv download). The correct PyTorch build depends on your hardware (NVIDIA, AMD, or CPU-only), so use the selector on the PyTorch website if the default `pip install torch` does not match your machine.
 
 To build the sizing program (requires [Rust]):
 
@@ -67,27 +69,28 @@ Rebuild with `--release` after any change to the Rust code, because `architectur
 
 ### Dataset folder
 
-The `dataset/` folder is not part of the repository (it is listed in `.gitignore`), because it holds copyrighted PDFs and a large text file. Create it in the project root:
+The `dataset/` folder is not part of the repository (it is listed in `.gitignore`), because it holds copyrighted PDFs and large text files. It looks like this:
 
 ```
 dataset/
-  pdfs/              put the PDFs you want to train on here
-  english_dataset/   created by download_data.py
+  pdfs/              PDFs you add by hand
+  arxiv_pdfs/        created by download_arxiv_data.py
+  english_dataset/   created by download_english_data.py
 ```
 
 Without `dataset/pdfs/`, the extractor prints "THE DIRECTORY DOES NOT EXIST." and counts only the text files.
 
-To download the English text, create a `.env` file in the project root for any Hugging Face settings you use (it is also in `.gitignore`, so never commit it), make sure `dataset/english_dataset/` exists, and run:
+Create a `.env` file in the project root for any Hugging Face settings you use. It is also in `.gitignore`, so never commit it.
+
+### Running
+
+Run everything from the project root:
 
 ```bash
-python download_data.py
-```
-
-Then run the tools from the project root:
-
-```bash
-python architecture.py      # hardware detection, benchmark, token count and sizing
-python data_extractor.py    # extraction, cleaning and token count only
+python download_english_data.py   # one-time English text download (needs internet)
+python download_arxiv_data.py     # downloads arXiv PDFs (needs internet)
+python data_extractor.py          # extraction, cleaning and token count only
+python architecture.py            # hardware detection, benchmark, token count and sizing
 ```
 
 ## Requirements
@@ -95,7 +98,7 @@ python data_extractor.py    # extraction, cleaning and token count only
 - Python 3.x
 - Rust toolchain (for `sizer_core`)
 - For GPU detection: NVIDIA drivers (`nvidia-smi`) or ROCm tooling (`amd-smi` / `rocm-smi` / `rocminfo`), depending on hardware. CPU-only systems fall back automatically.
-- Internet access for `download_data.py`
+- Internet access for the download scripts
 
 ## License
 

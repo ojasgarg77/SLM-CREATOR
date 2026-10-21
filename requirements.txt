@@ -2,3 +2,5 @@ torch
 pymupdf
 datasets
 python-dotenv
+arxiv
+requests
