@@ -4,3 +4,4 @@ datasets
 python-dotenv
 arxiv
 requests
+beautifulsoup4

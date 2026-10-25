@@ -8,16 +8,16 @@ The v1 target is a model hyperspecialized in **neural networks**, built for my o
 
 ## About this project
 
-This is an open-ended personal learning project (roughly a 5-6 month effort, with no fixed deadline). I am learning by building: **the entire codebase is handwritten by me**, piece by piece. AI is used as a tutor for explanations and concepts, not as a source of finished code.
+This is an open-ended personal learning project (roughly a 5-6 month effort, with no fixed deadline). I am learning by building: **the entire codebase is handwritten by me**, piece by piece. AI is used as a tutor for explanations and concepts, not as a source of finished code. Design decisions and dropped ideas, with reasons, are logged in [docs/decisions.md](docs/decisions.md).
 
-I do not own a GPU. The GPU code paths (NVIDIA, modern AMD, legacy AMD) cannot be run on my machine, so for GPU edge cases I rely on AI-described outputs (for example, what the vendor tools would print on various hardware) rather than AI-written code, and I test my parsing against mock tool output.
+I do not own a GPU. The GPU code paths (NVIDIA, modern AMD, legacy AMD) cannot be run on my machine, so for GPU edge cases I rely on AI-described outputs (for example, what the vendor tools would print on various hardware) rather than AI-written code, and I test my parsing against mock tool output. Real training is planned on a laptop with an RTX 4050 (6 GB VRAM).
 
 ## Planned pipeline
 
 1. **Hardware detection**: detect an NVIDIA GPU, a modern or legacy AMD GPU, or fall back to CPU-only. Collect GPU name and total VRAM.
 2. **Sizing**: a Rust program (`sizer_core`) takes the detected hardware, the user's training-time budget and the size of the training data, and works out a feasible parameter count (capped at 100M). Sizing is deterministic arithmetic, not an LLM guess. It takes the smallest of four limits:
    - **Memory limit**: how many parameters fit in VRAM (about 20 bytes per parameter, with a 10% cushion).
-   - **Time limit**: how many parameters can be trained in the time budget, using the Chinchilla rule (training tokens = 20 x parameters), 6 FLOPs per parameter per token, and a utilization factor of 0.3 because real training is slower than a pure matmul benchmark.
+   - **Time limit**: how many parameters can be trained in the time budget, using the Chinchilla rule (training tokens = 20 x parameters), 6 FLOPs per parameter per token, and a utilization factor of 0.3 (an estimate, not measured) because real training is slower than a pure matmul benchmark.
    - **Data limit**: how many parameters the available training data can support: tokens x 4 epochs / 20.
    - **Cap**: 100M parameters.
 3. **Specialization matching**: the user describes what they want the model specialized in, and an LLM matches that to one of several pre-curated datasets. The user can override the pick. (For v1 the target is fixed to neural networks, so this step can wait.)
@@ -28,7 +28,7 @@ I do not own a GPU. The GPU code paths (NVIDIA, modern AMD, legacy AMD) cannot b
 ## Current status
 
 - ✅ **Hardware detection** (`architecture.py`): detects NVIDIA (`nvidia-smi`), modern AMD (`amd-smi`), legacy AMD (`rocm-smi`/`rocminfo`), or CPU-only. If several GPUs are found, the user picks one. Also asks for the training-time budget in hours. Tested live on a CPU-only machine; the GPU paths have been tested against mock tool output only.
-- ✅ **TFLOPS benchmark** (`architecture.py`): measures the machine's real speed with a matrix-multiplication benchmark (skipped on CPU-only systems).
+- ✅ **TFLOPS benchmark** (`architecture.py`): measures the machine's real speed with an fp32 4096x4096 matrix-multiplication benchmark (skipped on CPU-only systems). Not yet run on the target GPU.
 - ✅ **Sizing** (`sizer_core`, Rust): memory, time and data limits all work, with a 100M parameter cap.
   - Python sends four values to the Rust program over standard input, one per line: VRAM (MiB), training hours, measured TFLOPS, and the total number of training tokens.
   - Rust parses them, computes the four limits, and prints the smallest to standard output. A token count of zero is an error, so a missing dataset cannot silently produce a zero-parameter model.
@@ -38,11 +38,26 @@ I do not own a GPU. The GPU code paths (NVIDIA, modern AMD, legacy AMD) cannot b
   - To do: split reading from computing in Rust so the math can be unit-tested, validate the values Python sends, handle a failed sizer run cleanly on the Python side (the result variable is left unset), and measure real memory per parameter on the target GPU.
 - 🔧 **Data collection and extraction**:
   - `download_english_data.py`: streams the first 500,000 sentences of a cleaned BookCorpus dataset from Hugging Face into `dataset/english_dataset/english_dataset.txt` (about 41.5M characters). It skips the download if the file already exists. This is general English fiction, already lowercase, and is meant as a base for English, not as neural-network content.
-  - `download_arxiv_data.py`: searches arXiv for papers matching a query (currently `cs.LG` papers about "neural networks", 5 results by default) and downloads their PDFs into `dataset/arxiv_pdfs/`. It sanitizes file names, skips files that already exist, and deletes corrupt or empty downloads. Written but not yet scaled up.
-  - `data_extractor.py`: finds every PDF in `dataset/pdfs/` and every text file in `dataset/english_dataset/`, extracts the PDF text with PyMuPDF, fixes typographic ligatures (such as "ﬁ" to "fi"), removes footnote markers, counts characters, and estimates tokens at 4 characters per token. `main()` returns the total so `architecture.py` can import it. Last measured total: about 11.1M tokens (the 7 hand-picked PDFs are about 0.7M of that).
-  - To do (wiring): the extractor does not read `dataset/arxiv_pdfs/` yet, so downloaded arXiv papers are not counted until that folder is added (or the PDFs are moved into `dataset/pdfs/`).
-  - To do (cleaning): lowercase the PDF text to match the English data, normalize the spacing around punctuation in the English data, drop ebook boilerplate and URL lines, share one cleaning function between both sources, keep paragraph breaks in PDFs, and handle words split across lines by hyphens.
-  - To do (data): collect much more on-topic neural-network text, because on-topic text is only a small share of the current mix.
+  - `download_arxiv_text.py`: searches arXiv for papers matching a query (currently `cs.LG` papers about "neural networks", 3 results by default), fetches each paper's ar5iv HTML page, and writes cleaned text to `dataset/arxiv_texts/<arxiv_id>.txt` with TITLE / ARXIV ID / ABSTRACT / BODY fields. Cleaning rules:
+    - Math is kept as `$LaTeX$`, taken from the HTML annotation element.
+    - Citations become `[CITE]`.
+    - Section numbers are kept; equation labels like `(2)` are dropped.
+    - Authors, affiliations, the bibliography, footnotes and figures are removed.
+    - Tables are removed unless they contain equation rows (some papers lay out multi-line equations inside a table).
+    - Skips files that already exist and deletes corrupt or empty ones.
+    - Tested on a few papers only; not yet scaled up.
+  - `data_extractor.py`: finds every PDF in `dataset/pdfs/` and every text file in `dataset/english_dataset/`, extracts the PDF text with PyMuPDF, fixes typographic ligatures (such as "ﬁ" to "fi"), removes footnote markers, counts characters, and estimates tokens at 4 characters per token. `main()` returns the total so `architecture.py` can import it. Last measured total: about 11.1M tokens (the 7 hand-picked PDFs are about 0.7M of that). This number predates the arXiv text files and may be stale.
+  - To do (wiring): the extractor does not read `dataset/arxiv_texts/` yet, so downloaded arXiv papers are not counted until that folder is added. These files are already plain text, so they need no PyMuPDF step.
+  - To do (arXiv):
+    - Filter by license **before** any bulk download (only CC0 and CC BY look usable so far), and keep a manifest: arXiv ID, license, source URL, download date.
+    - Check why some papers (for example Adam, 1412.6980) appear to convert only partially, and add a check for partial pages.
+    - Re-run the table rule on more papers to confirm it.
+    - Decide what mentions like "Eq. 2" should become now that equation labels are dropped (for example a placeholder token, like `[CITE]`).
+    - Headings cannot be told apart from paragraphs in the output; consider a marker.
+    - Normalize LaTeX style differences (`\it`, `\bf`, `\mathrm`) using frequency counts over many papers.
+  - To do (cleaning, PDFs and English data): lowercase the PDF text to match the English data, normalize the spacing around punctuation in the English data, drop ebook boilerplate and URL lines, share one cleaning function between all sources, keep paragraph breaks in PDFs, and handle words split across lines by hyphens.
+  - To do (data): collect much more on-topic neural-network text, because on-topic text is only a small share of the current mix. Cleaned arXiv papers are much shorter than raw PDFs, so the number of papers needed is likely higher than first estimated; measure tokens per usable paper on a sample.
+- ⏳ Tokenizer (must keep `[CITE]` and `$` as single tokens and preserve whitespace exactly): not started.
 - ⏳ Dataset specialization matching: not started.
 - ⏳ Rust ingestion pipeline (tokenizing, batching, streaming): not started.
 - ⏳ Training loop: not started.
@@ -56,7 +71,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-`requirements.txt` contains `torch` (the TFLOPS benchmark), `pymupdf` (PDF extraction), `datasets` and `python-dotenv` (the English download), and `arxiv` and `requests` (the arXiv download). The correct PyTorch build depends on your hardware (NVIDIA, AMD, or CPU-only), so use the selector on the PyTorch website if the default `pip install torch` does not match your machine.
+`requirements.txt` contains `torch` (the TFLOPS benchmark), `pymupdf` (PDF extraction), `datasets` and `python-dotenv` (the English download), `arxiv` and `requests` (finding and fetching arXiv papers), and `beautifulsoup4` (parsing the ar5iv HTML). The correct PyTorch build depends on your hardware (NVIDIA, AMD, or CPU-only), so use the selector on the PyTorch website if the default `pip install torch` does not match your machine.
 
 To build the sizing program (requires [Rust]):
 
@@ -74,7 +89,7 @@ The `dataset/` folder is not part of the repository (it is listed in `.gitignore
 ```
 dataset/
   pdfs/              PDFs you add by hand
-  arxiv_pdfs/        created by download_arxiv_data.py
+  arxiv_texts/       created by download_arxiv_text.py
   english_dataset/   created by download_english_data.py
 ```
 
@@ -88,7 +103,7 @@ Run everything from the project root:
 
 ```bash
 python download_english_data.py   # one-time English text download (needs internet)
-python download_arxiv_data.py     # downloads arXiv PDFs (needs internet)
+python download_arxiv_text.py     # downloads and cleans arXiv papers as text (needs internet)
 python data_extractor.py          # extraction, cleaning and token count only
 python architecture.py            # hardware detection, benchmark, token count and sizing
 ```
