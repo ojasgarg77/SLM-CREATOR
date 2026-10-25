@@ -190,5 +190,15 @@ def download_txt_arxiv(download_dir:Path,query:str="cat:cs.LG AND 'neural networ
 if __name__=="__main__":
     target_directory=Path(__file__).parent/"dataset"/"arxiv_texts"
     query_string='cat:cs.LG AND "neural networks"'
-    input("INTERNET CONNECTION IS REQUIRED FOR THIS STEP\n PRESS ENTER TO CONTINUE--")
-    download_txt_arxiv(target_directory,query=query_string,max_results=3)   
+    print("INTERNET CONNECTION IS REQUIRED FOR THIS STEP\n PRESS ENTER TO CONTINUE--")
+    while True:
+        user_input=input("HOW MANY PAPER DO YOU WANT TO DOWNLOAD?")
+        try:
+            num_papers=int(user_input)
+            if num_papers>0:
+                break
+            else:
+                print("INVALID INPUT.\n")
+        except ValueError:
+            print("INVALID INPUT\n")
+        total_download=download_txt_arxiv(target_directory,query=query_string,max_results=num_papers)   
