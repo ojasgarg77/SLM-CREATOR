@@ -18,7 +18,7 @@ def find_pdf_files():
     pdf_list=[]
     base_path=Path(__file__).parent/"dataset"/"pdfs"
     if not base_path.is_dir():
-        print("THE DIRECTORY DOES NOT EXIST.")
+        print("""THE DIRECTORY ("pdfs") DOES NOT EXIST.""")
         return pdf_list
     for file_path in sorted(base_path.glob("*.pdf")):
         print(f"PDF {file_path.name} found.")
@@ -28,15 +28,30 @@ def find_pdf_files():
 def get_english_tokens():
     english_txt_files=[]
     base_path=Path(__file__).parent /"dataset" / "english_dataset"
+    if not base_path.is_dir():
+        print("""THE DIRECTORY ("english_dataset") DOES NOT EXIST.""")
+        return english_txt_files
     for english_files in sorted(base_path.glob("*.txt")):
         print(f"TXT {english_files.name} found.")
         english_txt_files.append(english_files)
     return english_txt_files
 
+def get_arxiv_tokens():
+    arxiv_txt_files=[]
+    base_path=Path(__file__).parent /"dataset" / "arxiv_texts"
+    if not base_path.is_dir():
+        print("""THE DIRECTORY ("arxiv_texts") DOES NOT EXIST.""")
+        return arxiv_txt_files
+    for arxiv_files in sorted(base_path.glob("*.txt")):
+        print(f"TXT {arxiv_files.name} found.")
+        arxiv_txt_files.append(arxiv_files)
+    return arxiv_txt_files
+
 def total_char_count_dic():  
     output_counts={}  
-    files=find_pdf_files()
-    for path in files:
+
+    pdf_files=find_pdf_files()
+    for path in pdf_files:
         count=0
         with pymupdf.open(path) as document:
             all_text=""
@@ -49,6 +64,18 @@ def total_char_count_dic():
             for line in all_text.splitlines():
                 count+=len(line)
         output_counts[path.name]=count
+
+
+    arxiv_files=get_arxiv_tokens()
+    for path in arxiv_files:
+        count=0
+        all_text=path.read_text(encoding="utf-8",errors="ignore")
+        for fancy,plain in LIGATURE_DICTIONARY.items():
+            all_text=all_text.replace(fancy,plain)
+        for line in all_text.splitlines():
+            count+=len(line)
+        output_counts[path.name]=count
+
 
     english_files=get_english_tokens()
     for path in english_files:
