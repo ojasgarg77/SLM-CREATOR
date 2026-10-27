@@ -39,15 +39,13 @@ I do not own a GPU. The GPU code paths (NVIDIA, modern AMD, legacy AMD) cannot b
 
 - 🔧 **Data collection and extraction**:
   - `download_english_data.py`: streams the first 500,000 sentences of a cleaned BookCorpus dataset from Hugging Face into `dataset/english_dataset/english_dataset.txt` (about 41.5M characters). It skips the download if the file already exists. This is general English fiction, already lowercase, and is meant as a base for English, not as neural-network content.
-  - `download_arxiv_text.py`: searches arXiv for papers matching a query (currently `cs.LG` papers about "neural networks", 3 results by default), fetches each paper's ar5iv HTML page, and writes cleaned text to `dataset/arxiv_texts/<arxiv_id>.txt` with TITLE / ARXIV ID / ABSTRACT / BODY fields. Cleaning rules:
-    - Math is kept as `$LaTeX$`, taken from the HTML annotation element.
-    - Citations become `[cite]`.
-    - Section numbers are kept; equation labels like `(2)` are dropped.
-    - Authors, affiliations, the bibliography, footnotes and figures are removed.
-    - Tables are removed unless they contain equation rows (some papers lay out multi-line equations inside a table).
-    - Skips files that already exist and deletes corrupt or empty ones.
-    - Tested on a few papers only; not yet scaled up.
-  - `data_extractor.py`: finds every PDF in `dataset/pdfs/` and every text file in `dataset/english_dataset/`, extracts the PDF text with PyMuPDF, fixes typographic ligatures (such as "ﬁ" to "fi"), removes footnote markers, counts characters, and estimates tokens at 4 characters per token. `main()` returns the total so `architecture.py` can import it. 
+  - `download_arxiv_text.py`: interactively prompts the user for the number of papers to download, searches arXiv for papers matching a specific NLP/ML/LLM query string, fetches each paper's ar5iv HTML page, and writes structured text files to `dataset/arxiv_texts/<arxiv_id>.txt` with fields: `title--`, `arxiv id--`, `abstract--`, and `body--`. Cleaning and processing steps include:
+    - Lowercasing non-math content via `lowercase_txt()` while protecting LaTeX math blocks.
+    - Extracting and cleaning math output (`clean_math_output`) to keep expressions in `$` LaTeX delimiters using HTML annotations or fallback text.
+    - Cleaning paper text (`clean_paper_text`) by stripping invisible Unicode characters, normalizing spacing around punctuation, handling hyphenated line breaks, and collapsing excessive newlines.
+    - Filtering out citations, author info, affiliations, bibliographies, footnotes, figures, and irrelevant tables.
+    - Skipping existing files and handling/deleting corrupt or empty files.
+  - `data_extractor.py`: scans PDFs in `dataset/pdfs/`, text files in `dataset/arxiv_texts/`, and text files in `dataset/english_dataset/`. It extracts text from PDFs using PyMuPDF, cleans typographic ligatures (such as "ﬀ" to "ff", "ﬁ" to "fi", etc.) via `LIGATURE_DICTIONARY`, counts characters across lines for all sources, and estimates total tokens (`main()`) at 4 characters per token to pass back to `architecture.py`.
   - To do (arXiv):
     - Check why some papers (for example Adam, 1412.6980) appear to convert only partially, and add a check for partial pages.
     - Re-run the table rule on more papers to confirm it.
