@@ -4,6 +4,7 @@ import re
 import requests
 from bs4 import BeautifulSoup
 import time
+from bs4 import NavigableString
 
 def clean_paper_text(text:str)->str:
     text=text.replace("\u200b","").replace("\u200c","").replace("\u200d","").replace("\u00ad","")
@@ -47,14 +48,7 @@ def clean_math_output(soup):
     return soup
 
 def lowercase_txt(text:str)->str:
-    text_parts=re.split(r'(\$.*?\$)',text,flags=re.S)
-    processed_parts=[]
-    for part in text_parts:
-        if part.startswith("$") and part.endswith("$"):
-            processed_parts.append(part)
-        else:
-            processed_parts.append(part.lower())
-    return "".join(processed_parts)
+    return text.lower()
 
 def download_txt_arxiv(download_dir:Path,query:str="cat:cs.LG AND 'neural networks'",max_results:int=3)->int:
     download_dir.mkdir(parents=True,exist_ok=True)
@@ -93,7 +87,6 @@ def download_txt_arxiv(download_dir:Path,query:str="cat:cs.LG AND 'neural networ
 
             if response.status_code==200:
                 soup=BeautifulSoup(response.text,"html.parser")
-                soup=clean_math_output(soup)
                 document_container=soup.find(class_="ltx_document")
                 if document_container:
 
@@ -128,6 +121,9 @@ def download_txt_arxiv(download_dir:Path,query:str="cat:cs.LG AND 'neural networ
 
                         if not does_equation_exist:
                             table_node.decompose()
+                    
+                    process_prose_nodes(document_container)
+                    document_container=clean_math_output(document_container)
 
                     target_classes=[
                     "ltx_p",
@@ -175,10 +171,10 @@ def download_txt_arxiv(download_dir:Path,query:str="cat:cs.LG AND 'neural networ
 
 
                 file_content=(
-                    f"title--{lowercase_txt(paper.title)}\n"
+                    f"title--{paper.title.lower}\n"
                     f"arxiv id--{clean_arxiv_id}\n"
-                    f"abstract--{lowercase_txt(paper.summary)}\n"
-                    f"body--{lowercase_txt(full_paper)}\n\n")
+                    f"abstract--{paper.summary.lower}\n"
+                    f"body--{full_paper}\n\n")
 
 
                 with open(filepath,"w",encoding="utf-8") as f:
@@ -202,6 +198,53 @@ def download_txt_arxiv(download_dir:Path,query:str="cat:cs.LG AND 'neural networ
             if filepath.exists() and filepath.stat().st_size<=1:
                 filepath.unlink()
     return download_count
+
+def process_prose_nodes(container_nodes):
+
+    LIGATURE_AND_UNICODE_DICTIONARY={
+    "\ufb00":"ff",
+    "\ufb01":"fi",
+    "\ufb02":"fl",
+    "\ufb03":"ffi",
+    "\ufb04":"ffl",
+    "\ufb05":"st",
+    "\ufb06":"st",
+    "\u2217":"",
+    "\u2020":"",
+    "\u2021":"",
+    "\xa0":" ",
+    "\u2009":" ",
+    "\u2004":" ",
+    } 
+
+    for node in container_nodes.find_all(string=True):
+
+        if not isinstance(node,NavigableString):
+            continue
+        if node.parent and (node.parent.name in ["math", "annotation"] or "ltx_math" in "".join(node.parent.get("class",[]))):
+            continue
+
+        is_math_node=False
+
+        for parent in node.parents:
+            if parent.name in ["math", "annotation"]:
+                is_math_node=True
+                break
+
+            classes=parent.get("class",[])
+            if classes and any(re.search(r"ltx_math",str(cls),re.IGNORECASE) for cls in classes):
+                is_math_node=True
+                break
+             
+        if is_math_node:
+            continue     
+
+        orignal_text=node.string
+        if orignal_text:
+            cleaned_text=orignal_text.lower()
+            for unicode_char,replacements in LIGATURE_AND_UNICODE_DICTIONARY.items():
+                cleaned_text=cleaned_text.replace(unicode_char,replacements)
+            node.replace_with(cleaned_text)
 
 if __name__=="__main__":
     target_directory=Path(__file__).parent/"dataset"/"arxiv_texts"

@@ -8,6 +8,9 @@ const MAX_PARAMS:f64=100_000_000.0;
 const EPOCHS:u64=4;
 const TOKEN_PER_PARAM:u64=20;
 
+//EPOCHS are hardcoded because study shows models train best at 4 EPOCHS only.On adding more models tend to memorize the text instead of learning.
+// and if not given enough the model tends to outputs glibberish.
+
 fn read_python_line()->String{
     let mut buf=String::new();
     io::stdin()

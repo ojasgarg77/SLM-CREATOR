@@ -2,9 +2,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .venv/
-/sizer_core/target/
 .vscode/
-.DS_Store
-Thumbs.db
 dataset/
 tests.py
+**/target/

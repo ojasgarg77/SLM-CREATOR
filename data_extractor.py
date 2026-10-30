@@ -2,7 +2,7 @@ import pymupdf
 import unicodedata
 from pathlib import Path
 
-LIGATURE_DICTIONARY={
+LIGATURE_AND_UNICODE_DICTIONARY={
     "\ufb00":"ff",
     "\ufb01":"fi",
     "\ufb02":"fl",
@@ -12,7 +12,10 @@ LIGATURE_DICTIONARY={
     "\ufb06":"st",
     "\u2217":"",
     "\u2020":"",
-    "\u2021":""
+    "\u2021":"",
+    "\xa0":" ",
+    "\u2009":" ",
+    "\u2004":" ",
 } 
 def find_pdf_files():
     pdf_list=[]
