@@ -171,9 +171,9 @@ def download_txt_arxiv(download_dir:Path,query:str="cat:cs.LG AND 'neural networ
 
 
                 file_content=(
-                    f"title--{paper.title.lower}\n"
+                    f"title--{paper.title.lower()}\n"
                     f"arxiv id--{clean_arxiv_id}\n"
-                    f"abstract--{paper.summary.lower}\n"
+                    f"abstract--{paper.summary.lower()}\n"
                     f"body--{full_paper}\n\n")
 
 
@@ -202,20 +202,50 @@ def download_txt_arxiv(download_dir:Path,query:str="cat:cs.LG AND 'neural networ
 def process_prose_nodes(container_nodes):
 
     LIGATURE_AND_UNICODE_DICTIONARY={
-    "\ufb00":"ff",
-    "\ufb01":"fi",
-    "\ufb02":"fl",
-    "\ufb03":"ffi",
-    "\ufb04":"ffl",
-    "\ufb05":"st",
-    "\ufb06":"st",
-    "\u2217":"",
-    "\u2020":"",
-    "\u2021":"",
-    "\xa0":" ",
-    "\u2009":" ",
-    "\u2004":" ",
-    } 
+    "\ufb00": "ff",
+    "\ufb01": "fi",
+    "\ufb02": "fl",
+    "\ufb03": "ffi",
+    "\ufb04": "ffl",
+    "\ufb05": "st",
+    "\ufb06": "st",
+    "\u0132": "IJ",
+    "\u0133": "ij",
+    "\u0152": "OE",
+    "\u0153": "oe",
+    "\u00e6": "ae",
+    "\u00c6": "AE",
+    "\u2212": "-",
+    "\u2010": "-",
+    "\u2011": "-",
+    "\u2012": "-",
+    "\u2013": "-",
+    "\u2014": "-",
+    "\u2215": "/",
+    "\u201c": "\"",
+    "\u201d": "\"",
+    "\u2018": "'",
+    "\u2019": "'",
+    "\u2026": "...",
+    "\u2217": "",
+    "\u2020": "",
+    "\u2021": "",
+    "\xa0": " ",
+    "\u2000": " ",
+    "\u2001": " ",
+    "\u2002": " ",
+    "\u2003": " ",
+    "\u2004": " ",
+    "\u2005": " ",
+    "\u2006": " ",
+    "\u2007": " ",
+    "\u2008": " ",
+    "\u2009": " ",
+    "\u200a": " ",
+    "\u202f": " ",
+    "\u200b": "",
+    "\u00ad": "",
+    }
 
     for node in container_nodes.find_all(string=True):
 
