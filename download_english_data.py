@@ -36,6 +36,6 @@ def stream_and_save_english_file(target_file:Path,max_sentences:int=500_000)->in
 
 if __name__=="__main__":
     target_directory=Path(__file__).parent/"dataset"/"english_dataset"
-    target_file=target_directory/"english_dataset.txt"
+    target_file=target_directory/"english_data.txt"
     total_characters=stream_and_save_english_file(target_file)
     print(f"DOWNLOADED {total_characters} TOTAL CHARACTERS.")

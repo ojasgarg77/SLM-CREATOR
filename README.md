@@ -45,7 +45,7 @@ I do not own a GPU. The GPU code paths (NVIDIA, modern AMD, legacy AMD) cannot b
   - The efficiency factor is currently 0.3 in `sizer_core/src/main.rs`. It is a placeholder, not a measurement. Against a bf16 baseline the realistic range is about 0.1-0.35, and I plan to lower it to about 0.2 until I can measure it (see "Measuring the efficiency factor" below).
 
 - 🔧 **Data collection and extraction**:
-  - `download_english_data.py`: streams the first 500,000 sentences of a cleaned BookCorpus dataset from Hugging Face into `dataset/english_dataset/english_dataset.txt` (about 41.5M characters). It skips the download if the file already exists, and it reads the Hugging Face token from a `.env` file (see Setup). This is general English fiction, already lowercase, and is meant as a base for English, not as neural-network content.
+  - `download_english_data.py`: streams the first 500,000 sentences of a cleaned BookCorpus dataset from Hugging Face into `dataset/english_dataset/english_data.txt` (about 41.5M characters). It skips the download if the file already exists, and it loads a `.env` file for the Hugging Face token (see Setup). This is general English fiction, already lowercase, and is meant as a base for English, not as neural-network content.
   - `download_arxiv_text.py`: interactively prompts the user for the number of papers to download, searches arXiv for papers matching a specific NLP/ML/LLM query string, fetches each paper's ar5iv HTML page, and writes structured text files to `dataset/arxiv_texts/<arxiv_id>.txt` with fields: `title--`, `arxiv id--`, `abstract--`, and `body--`. Cleaning and processing steps include:
     - Lowercasing non-math content while protecting LaTeX math blocks.
     - Normalizing typographic Unicode in prose (not in math) to plain ASCII through `LIGATURE_AND_UNICODE_DICTIONARY` in `process_prose_nodes`: ligatures (`ﬁ` to `fi`), curly quotes, the different dashes and the minus sign to `-`, the ellipsis character to `...`, the many Unicode space characters to a normal space, and zero-width characters and soft hyphens removed.
@@ -60,12 +60,23 @@ I do not own a GPU. The GPU code paths (NVIDIA, modern AMD, legacy AMD) cannot b
     - Re-run the table rule on more papers to confirm it.
     - Decide what mentions like "Eq. 2" should become now that equation labels are dropped (for example a placeholder token, like `[cite]`).
     - Normalize LaTeX style differences (`\it`, `\bf`, `\mathrm`) using frequency counts over many papers.
-  - To do (cleaning, PDFs and English data): normalize the spacing around punctuation in the English data, drop ebook boilerplate and URL lines, share one cleaning function between all sources, keep paragraph breaks in PDFs, and handle words split across lines by hyphens.
+  - To do (cleaning, PDFs and English data): normalize the spacing around punctuation in the English data, drop ebook boilerplate and URL lines, share one cleaning function (and one Unicode dictionary) between all sources, keep paragraph breaks in PDFs, and handle words split across lines by hyphens.
   - To do (data): collect much more on-topic neural-network text, because on-topic text is only a small share of the current mix and, once the benchmark is fixed, the data limit is likely to be the binding one. Cleaned arXiv papers are much shorter than raw PDFs, so the number of papers needed is likely higher than first estimated; measure tokens per usable paper on a sample.
 
-- 🔧 **Tokenizer** (`tokenizer_core`, Rust, work in progress): a byte-level BPE tokenizer. It must keep `[cite]` and `$` as single tokens and preserve whitespace exactly.
-  - Done so far: reads one arXiv text file and pre-tokenizes it with a regex (`regex` crate) into chunks: the `[cite]` placeholder, `$`, words, whitespace runs, and single punctuation characters. Each chunk is then converted to its raw UTF-8 bytes.
-  - Not yet done: counting adjacent byte pairs, the merge loop, the vocabulary, encode/decode, and saving the learned merges. The input path is currently hard-coded to a single paper and relative to the `tokenizer_core` folder.
+- 🔧 **Tokenizer** (`tokenizer_core`, Rust, work in progress): a byte-level BPE tokenizer trained from scratch. `[cite]` and `$` must each stay a single token, and whitespace must be preserved exactly.
+  - **Token IDs** (`u16`, so up to 65,535): 0-255 are the raw bytes, 256 is reserved for `[cite]`, and 257 onward are merged tokens numbered in the order they are learned.
+  - **Done so far:**
+    - Reads every `.txt` file in `dataset/arxiv_texts/` and joins them with blank lines between papers.
+    - Splits the text into chunks with a regex (`regex` crate): the `[cite]` placeholder, `$`, words, whitespace runs, and single punctuation characters. A `[cite]` chunk becomes the single ID 256; every other chunk becomes its UTF-8 bytes widened to `u16`. Merges never cross a chunk boundary.
+    - Counts adjacent token pairs inside each chunk with an `IndexMap`, so that equally frequent pairs are always visited in the same order and two runs on the same data give the same result.
+    - Runs the merge loop: pick the most frequent pair, give it the next free ID, and rewrite every chunk left to right without overlapping matches. The number of merges is a small test value (`NET_MERGES`) for now.
+  - **Not done yet:**
+    - The learned merges are printed but not stored, so there is no merge list, no ID-to-bytes vocabulary, no encode or decode, and nothing is saved to disk.
+    - Every iteration recounts all pairs over every chunk from scratch, and identical chunks (for example the word "the") are stored separately each time. This is fine for testing, but too slow for the full corpus. Planned: store each distinct chunk once with its count, and update pair counts incrementally after a merge.
+    - The tie rule is implicit (the last maximum in insertion order wins). Replace it with an explicit rule and log it in `docs/decisions.md`.
+    - The input path is relative (`../dataset/arxiv_texts`), so for now the program must be run from inside `tokenizer_core`.
+  - **Open decisions:** the target vocabulary size (it sets the embedding table size, and with it a share of the parameter budget); whether the tokenizer should also train on the English text; whether the metadata lines (`title--`, `arxiv id--`, ...) stay in the training text; an end-of-document token; and whether a space should attach to the following word (currently spaces are separate chunks).
+  - **Tests to add:** joining the chunks must reproduce the original text exactly, and the number of `[cite]` occurrences in the text must equal the number of ID 256 in the encoded output.
 
 - ⏳ Dataset specialization matching: not started.
 - ⏳ Rust ingestion pipeline (batching and streaming; tokenizing builds on `tokenizer_core`): not started.
@@ -93,7 +104,7 @@ pip install -r requirements.txt
 
 ### Hugging Face token (`.env`)
 
-`download_english_data.py` loads a Hugging Face access token with `python-dotenv`. Create a file named `.env` in the project root:
+`download_english_data.py` loads a `.env` file from the project root with `python-dotenv`, so a Hugging Face access token can be provided there:
 
 ```
 HF_TOKEN=your_token_here
@@ -110,7 +121,7 @@ cd sizer_core
 cargo build --release
 ```
 
-To build the tokenizer program (work in progress; it depends on the `regex` crate, which Cargo downloads on first build):
+To build the tokenizer program (work in progress; it depends on the `regex` and `indexmap` crates, which Cargo downloads on first build):
 
 ```bash
 cd tokenizer_core
@@ -134,12 +145,19 @@ Without `dataset/pdfs/`, the extractor prints "THE DIRECTORY DOES NOT EXIST." an
 
 ### Running
 
-Run everything from the project root:
+Run the Python scripts from the project root:
 
 ```bash
 python download_english_data.py   # one-time English text download (needs internet)
 python download_arxiv_text.py     # downloads and cleans arXiv papers as text (needs internet)
 python architecture.py            # hardware detection, benchmark, token count and sizing
+```
+
+The tokenizer is still a work in progress and is run on its own from inside its folder (it reads `../dataset/arxiv_texts`):
+
+```bash
+cd tokenizer_core
+cargo run --release
 ```
 
 ## Requirements
@@ -149,6 +167,17 @@ python architecture.py            # hardware detection, benchmark, token count a
 - For GPU detection: NVIDIA drivers (`nvidia-smi`) or ROCm tooling (`amd-smi` / `rocm-smi` / `rocminfo`), depending on hardware. CPU-only systems fall back automatically.
 - For the intended training setup: a GPU with bf16 support (NVIDIA Ampere or newer, such as the RTX 4050).
 - Internet access for the download scripts
+
+## Contributing
+
+Contributions are welcome! Since this is a hardware-aware project currently being developed in a CPU-only environment, community testing is incredibly valuable right now.
+
+If you have an NVIDIA or AMD GPU, you can help immediately by running our architecture scripts and reporting how they handle your system topology.
+
+Please check out our active tracking issue to help us validate:
+👉 **[Issue #1: Help Needed: Live testing & validation of GPU detection paths (NVIDIA/AMD)](https://github.com/ojasgarg77/SLM-CREATOR/issues/1#issue-6224761352)**
+
+For other bugs, documentation fixes, or dataset cleaning improvements, feel free to open a separate issue or submit a pull request.
 
 ## License
 

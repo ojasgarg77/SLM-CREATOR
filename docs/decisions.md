@@ -11,3 +11,10 @@ One entry per decision or dropped idea, with the reason. Code history lives in g
 - **Hardware speed: own benchmark only.** An unsourced claim of 35-45 TFLOPS for the RTX 4050 was rejected; spec-sheet fp32 is about 9 TFLOPS (Notebookcheck), real value comes from the matmul benchmark on that laptop.
 - **Fiction (BookCorpus): at most ~10% of the mix, or none.** About 10M of the 11.1M tokens counted so far; not on topic. Final mix to be decided with small experiments.
 - **Licensing: filter before any bulk download.** Excluded: arXiv's perpetual non-exclusive license. Usable: CC0, CC BY. Careful: BY-SA / NC variants. Skipped in v1: NC-ND.
+
+## 2026-11-5
+
+- **Replaced HashMap with IndexMap.** i chose indexmap over hashmap and added an overhead dependency was as-
+Firstly hashmap cant look up items by their numeric id without a slow manual search. The same is very fast in Indexmap.
+Secondly hashmap generates scrambled,random sequence to prevent HashDoS attack but we are not concerned regarding the same.
+This is a major drawback for our bpe algorithm and hence indexmap remains a better option.
