@@ -1,9 +1,12 @@
 __pycache__/
 *.py[cod]
 *$py.class
+
 .venv/
 .vscode/
+**/target/
+
 dataset/
 tests.py
-**/target/
 .env
+tokenizer_core/merges.bin
