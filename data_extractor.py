@@ -61,7 +61,7 @@ def total_char_count_dic():
             for page in document:
                 all_text+=page.get_text()
             
-            for fancy,plain in LIGATURE_DICTIONARY.items():
+            for fancy,plain in LIGATURE_AND_UNICODE_DICTIONARY.items():
                 all_text=all_text.replace(fancy,plain)
             
             for line in all_text.splitlines():
@@ -73,7 +73,7 @@ def total_char_count_dic():
     for path in arxiv_files:
         count=0
         all_text=path.read_text(encoding="utf-8",errors="ignore")
-        for fancy,plain in LIGATURE_DICTIONARY.items():
+        for fancy,plain in LIGATURE_AND_UNICODE_DICTIONARY.items():
             all_text=all_text.replace(fancy,plain)
         for line in all_text.splitlines():
             count+=len(line)
@@ -84,7 +84,7 @@ def total_char_count_dic():
     for path in english_files:
         count=0
         all_text=path.read_text(encoding="utf-8",errors="ignore")
-        for fancy,plain in LIGATURE_DICTIONARY.items():
+        for fancy,plain in LIGATURE_AND_UNICODE_DICTIONARY.items():
             all_text=all_text.replace(fancy,plain)
         for line in all_text.splitlines():
             count+=len(line)

@@ -32,7 +32,11 @@ def clean_math_output(soup):
         )
 
         if latex_annotation:
-            clean_latex=f"${latex_annotation.get_text(strip=True)}$"
+            raw_latex=latex_annotation.get_text(strip=True)
+            raw_latex=re.sub(r'\\(mathrm|mathit|mathbf|mathsf|mathtt|beta)\s*{(.*?)}',r'\2',raw_latex)
+            raw_latex=re.sub(r'\\(it|bf|rm|sf|tt)\s+([a-zA-Z0-9_+\-=<>!*()]+)', r'\2',raw_latex)
+            raw_latex=re.sub(r'\s+', '',raw_latex)
+            clean_latex=f"${raw_latex}$"
 
             if not clean_latex.startswith("$"):
                 clean_latex=f"${clean_latex}$"
@@ -42,6 +46,7 @@ def clean_math_output(soup):
         else:
             fallback_text = math_tag.get_text(separator="",strip=True)
             if fallback_text:
+                fallback_text=re.sub(r'\s+', '',fallback_text)
                 math_tag.replace_with(f"${fallback_text}$")
             else:
                 math_tag.decompose()
@@ -49,6 +54,83 @@ def clean_math_output(soup):
 
 def lowercase_txt(text:str)->str:
     return text.lower()
+
+def process_prose_nodes(container_nodes):
+
+    LIGATURE_AND_UNICODE_DICTIONARY={
+    "\ufb00": "ff",
+    "\ufb01": "fi",
+    "\ufb02": "fl",
+    "\ufb03": "ffi",
+    "\ufb04": "ffl",
+    "\ufb05": "st",
+    "\ufb06": "st",
+    "\u0132": "IJ",
+    "\u0133": "ij",
+    "\u0152": "OE",
+    "\u0153": "oe",
+    "\u00e6": "ae",
+    "\u00c6": "AE",
+    "\u2212": "-",
+    "\u2010": "-",
+    "\u2011": "-",
+    "\u2012": "-",
+    "\u2013": "-",
+    "\u2014": "-",
+    "\u2215": "/",
+    "\u201c": "\"",
+    "\u201d": "\"",
+    "\u2018": "'",
+    "\u2019": "'",
+    "\u2026": "...",
+    "\u2217": "",
+    "\u2020": "",
+    "\u2021": "",
+    "\xa0": " ",
+    "\u2000": " ",
+    "\u2001": " ",
+    "\u2002": " ",
+    "\u2003": " ",
+    "\u2004": " ",
+    "\u2005": " ",
+    "\u2006": " ",
+    "\u2007": " ",
+    "\u2008": " ",
+    "\u2009": " ",
+    "\u200a": " ",
+    "\u202f": " ",
+    "\u200b": "",
+    "\u00ad": "",
+    }
+
+    for node in container_nodes.find_all(string=True):
+
+        if not isinstance(node,NavigableString):
+            continue
+        if node.parent and (node.parent.name in ["math", "annotation"] or "ltx_math" in "".join(node.parent.get("class",[]))):
+            continue
+
+        is_math_node=False
+
+        for parent in node.parents:
+            if parent.name in ["math", "annotation"]:
+                is_math_node=True
+                break
+
+            classes=parent.get("class",[])
+            if classes and any(re.search(r"ltx_math",str(cls),re.IGNORECASE) for cls in classes):
+                is_math_node=True
+                break
+             
+        if is_math_node:
+            continue     
+
+        orignal_text=node.string
+        if orignal_text:
+            cleaned_text=orignal_text.lower()
+            for unicode_char,replacements in LIGATURE_AND_UNICODE_DICTIONARY.items():
+                cleaned_text=cleaned_text.replace(unicode_char,replacements)
+            node.replace_with(cleaned_text)
 
 def download_txt_arxiv(download_dir:Path,query:str="cat:cs.LG AND 'neural networks'",max_results:int=3)->int:
     download_dir.mkdir(parents=True,exist_ok=True)
@@ -199,82 +281,6 @@ def download_txt_arxiv(download_dir:Path,query:str="cat:cs.LG AND 'neural networ
                 filepath.unlink()
     return download_count
 
-def process_prose_nodes(container_nodes):
-
-    LIGATURE_AND_UNICODE_DICTIONARY={
-    "\ufb00": "ff",
-    "\ufb01": "fi",
-    "\ufb02": "fl",
-    "\ufb03": "ffi",
-    "\ufb04": "ffl",
-    "\ufb05": "st",
-    "\ufb06": "st",
-    "\u0132": "IJ",
-    "\u0133": "ij",
-    "\u0152": "OE",
-    "\u0153": "oe",
-    "\u00e6": "ae",
-    "\u00c6": "AE",
-    "\u2212": "-",
-    "\u2010": "-",
-    "\u2011": "-",
-    "\u2012": "-",
-    "\u2013": "-",
-    "\u2014": "-",
-    "\u2215": "/",
-    "\u201c": "\"",
-    "\u201d": "\"",
-    "\u2018": "'",
-    "\u2019": "'",
-    "\u2026": "...",
-    "\u2217": "",
-    "\u2020": "",
-    "\u2021": "",
-    "\xa0": " ",
-    "\u2000": " ",
-    "\u2001": " ",
-    "\u2002": " ",
-    "\u2003": " ",
-    "\u2004": " ",
-    "\u2005": " ",
-    "\u2006": " ",
-    "\u2007": " ",
-    "\u2008": " ",
-    "\u2009": " ",
-    "\u200a": " ",
-    "\u202f": " ",
-    "\u200b": "",
-    "\u00ad": "",
-    }
-
-    for node in container_nodes.find_all(string=True):
-
-        if not isinstance(node,NavigableString):
-            continue
-        if node.parent and (node.parent.name in ["math", "annotation"] or "ltx_math" in "".join(node.parent.get("class",[]))):
-            continue
-
-        is_math_node=False
-
-        for parent in node.parents:
-            if parent.name in ["math", "annotation"]:
-                is_math_node=True
-                break
-
-            classes=parent.get("class",[])
-            if classes and any(re.search(r"ltx_math",str(cls),re.IGNORECASE) for cls in classes):
-                is_math_node=True
-                break
-             
-        if is_math_node:
-            continue     
-
-        orignal_text=node.string
-        if orignal_text:
-            cleaned_text=orignal_text.lower()
-            for unicode_char,replacements in LIGATURE_AND_UNICODE_DICTIONARY.items():
-                cleaned_text=cleaned_text.replace(unicode_char,replacements)
-            node.replace_with(cleaned_text)
 
 if __name__=="__main__":
     target_directory=Path(__file__).parent/"dataset"/"arxiv_texts"

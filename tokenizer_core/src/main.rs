@@ -1,15 +1,15 @@
-use std::fs;
+use std::{fs::{self, File}, io::{BufWriter, Write}};
 use regex::Regex;
 use indexmap::IndexMap;
 
-const NET_MERGES:u16=101;
-
+const NET_MERGES:u16=201;
+//NET_MERGES can never exceed 65,276 because u16 limits us to 65,535.
 
 fn read_files()->String{
     let folder_location="../dataset/arxiv_texts";
     let mut all_contents=String::new();
 
-    let entries=fs::read_dir(folder_location)
+    let entries: fs::ReadDir=fs::read_dir(folder_location)
     .expect("ERROR IN READING DIRECTORY FILES.");
 
     for entry in entries{
@@ -20,7 +20,7 @@ fn read_files()->String{
                 let contents=fs::read_to_string(&path)
                 .unwrap_or_else(|_| panic!("FAILED TO READ FILES{:?}",path));
                 all_contents.push_str(&contents);
-                all_contents.push_str("\n\n\n");
+                all_contents.push_str("<|endoftext|>\n\n\n");
             }
         } 
     }
@@ -54,7 +54,7 @@ fn count_pairs(tokenized_chunks:&[Vec<u16>])->IndexMap<(u16,u16),usize>{
 
 
 fn bpe(text: &str){
-    let clean_text_way=Regex::new(r"\[cite\]|\$|\w+|\s+|[^\w\s]").unwrap();
+    let clean_text_way=Regex::new(r"<\|endoftext\|>|\[cite\]|\$|\w+|\s+|[^\w\s]").unwrap();
     //This specific line is the heart of the entire code. it tells the computer whr to chop the string into smaller units.
     //Because we needs to preserve $ and [cite] and hence they are given the priority and the code splits them first.
     let mut clean_text:Vec<&str>=Vec::new();
@@ -75,6 +75,8 @@ fn bpe(text: &str){
         let byte_tokens:Vec<u16>=if *chunk=="[cite]"{
             vec![256]
             //This line assigns the [cite] chunk the token number 256.
+        }else if *chunk=="<|endoftext|>"{
+            vec![257]
         }else{
             chunk.as_bytes().iter().map(|&b| b as u16).collect()
             //The function .as_bytes() performs an O(1) operation and treats string silence directly in u8 bytes
@@ -87,12 +89,17 @@ fn bpe(text: &str){
         tokenized_chunks.push(byte_tokens);
     }
 
-    let mut next_token_id:u16=257;
-    //We chose 257 for new merged tokens as avoids overlapping with any pre existing characters or special tokens.
+    let mut next_token_id:u16=258;
+    //We chose 258 for new merged tokens as avoids overlapping with any pre existing characters or special tokens.
     //ID(s)-
     //(0-255)->ASCII/UTF-8 characters
-    //256->Assigned to [cite]
-    //257-desired number(limit is 65,535)->Assigned to merged tokens.
+    //256,257->Assigned to [cite] and <|endoftext|>
+    //258-desired number(limit is 65,535)->Assigned to merged tokens.
+
+    let file=File::create("merges.bin")
+        .expect("ERROR IN CREATING BINARY FILE.");
+
+    let mut writer=BufWriter::new(file);
 
     for iteration in 1.. NET_MERGES{
         let pair_counts=count_pairs(&tokenized_chunks);
@@ -103,6 +110,12 @@ fn bpe(text: &str){
 
             println!("ITERATION--{:2} MERGING PAIR--{:?} (FREQUENCY--{}) INTO TOKEN ID{}",
         iteration,best_pair,frequency,next_token_id);
+        writer.write_all(&best_pair.0.to_le_bytes())
+            .expect("FAILED TO WRITE LEFT TOKEN BYTE.");
+        writer.write_all(&best_pair.1.to_le_bytes())
+            .expect("FAILED TO WRITE RIGHT TOKEN BYTE.");
+        writer.write_all(&next_token_id.to_le_bytes())
+            .expect("FAILED TO WRITE MERGED TOKEN BYTE.");                
 
         //ACTUAL IMPLEMENTATION OF THE BPE ALGORITHM (IMPLEMENTATION OF PAPER--"INCREMENTAL BPE TOKENIZATION")
 
@@ -136,9 +149,10 @@ fn bpe(text: &str){
             println!("NO MORE PAIRS FOUND FOR MERGING. STOPPING EARLY");
             break;
         }
-        
+        writer.flush()
+            .expect("FAILED TO FLUSH DATA TO SSD.");
     }
-
+    println!("SUCCESS:6 BYTE PACKED RULES ARE WRITTEN IN THE BINARY FILE COMPLETELY.");
 }
 
 fn main(){
