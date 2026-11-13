@@ -27,15 +27,13 @@ I do not own a GPU. The GPU code paths (NVIDIA, modern AMD, legacy AMD) cannot b
 
 ## Current status
 
-- ✅ **Hardware detection** (`architecture.py`): detects NVIDIA (`nvidia-smi`), modern AMD (`amd-smi`), legacy AMD (`rocm-smi`/`rocminfo`), or CPU-only. Each detected GPU is recorded as (architecture, VRAM in MiB, device index). If several GPUs are found, the user picks one, and the chosen device index is passed on to the benchmark. Also asks for the training-time budget in hours. Tested live on a CPU-only machine; the GPU paths have been tested against mock tool output only.
+- ✅ **Hardware detection** (`architecture.py`): detects NVIDIA (`nvidia-smi`), modern AMD (`amd-smi`), legacy AMD (`rocm-smi`/`rocminfo`), or CPU-only. • Each detected GPU is recorded as (architecture, VRAM in MiB, device index, GPU name). If several GPUs are found, the user picks one, and the chosen device index is passed on to the benchmark. Also asks for the training-time budget in hours. Tested live on a CPU-only machine; the GPU paths have been tested against mock tool output only.
 
-- 🔧 **TFLOPS benchmark** (`architecture.py`): measures the machine's real matmul speed with a 4096x4096 benchmark on the selected GPU (skipped on CPU-only systems).
-  - Runs in **bf16** when `torch.cuda.is_bf16_supported()` is true, otherwise falls back to fp32 and says so. The benchmark precision must match the training precision, otherwise the efficiency factor is meaningless.
-  - Does 10 warmup multiplications, then times several runs of 20 back-to-back multiplications each, with `torch.cuda.synchronize` before and after each timed window.
+- ✅ **TFLOPS benchmark** (`architecture.py`): measures the machine's real matmul speed with a 4096x4096 benchmark on the selected GPU (skipped on CPU-only systems).
+  - Runs in **bf16**  when native hardware bf16 is supported (checking `torch.cuda.is_bf16_supported(including_emulation=False)` on PyTorch 2.4+ or compute capability >= 8.0 on older versions, avoiding slow software-emulated bf16), otherwise falls back to fp32 and says so. The benchmark precision must match the training precision, otherwise the efficiency factor is meaningless.
+  -  Runs a 12-second thermal warmup soak to settle past laptop boost clocks, then times 10 runs of 20 back-to-back multiplications each and reports the median TFLOPS instead of the mean.Does 10 warmup multiplications, then times several runs of 20 back-to-back multiplications each, with `torch.cuda.synchronize` before and after each timed window.
+  - Sets `CUDA_DEVICE_ORDER=PCI_BUS_ID` before importing PyTorch and matches the vendor tool's GPU name against `torch.cuda.get_device_name()` (`resolve_pytorch_index`) so the `cuda:X` index targets the selected card.
   - Not yet run on the target GPU.
-  - To do: the benchmark is only about a second long, so it measures boost clocks, not the sustained speed of a multi-hour laptop run. Lengthen it (or compare early vs. late runs) and report the median instead of the mean.
-  - To do: `is_bf16_supported()` can return true for slow emulated bf16 on some older cards; check the installed PyTorch version for an option to exclude emulation.
-  - To do: confirm that the device index reported by the vendor tool matches the index PyTorch uses.
 
 - ✅ **Sizing** (`sizer_core`, Rust): memory, time and data limits all work, with a 100M parameter cap.
   - Python sends four values to the Rust program over standard input, one per line: VRAM (MiB), training hours, measured TFLOPS, and the total number of training tokens. The Rust side does not care which precision produced the TFLOPS number.
@@ -70,12 +68,12 @@ I do not own a GPU. The GPU code paths (NVIDIA, modern AMD, legacy AMD) cannot b
     - Reads every `.txt` file in `dataset/arxiv_texts/` and joins them, with an `<|endoftext|>` marker and blank lines after each paper, so documents are never run together.
     - Splits the text into chunks with a regex (`regex` crate): `<|endoftext|>`, the `[cite]` placeholder, `$`, words, whitespace runs, and single punctuation characters. `[cite]` becomes the single ID 256, `<|endoftext|>` the single ID 257; every other chunk becomes its UTF-8 bytes widened to `u16`. Merges never cross a chunk boundary.
     - Counts adjacent token pairs inside each chunk with an `IndexMap`, so that equally frequent pairs are always visited in the same order and two runs on the same data give the same result.
-    - Runs the merge loop: pick the most frequent pair, give it the next free ID, and rewrite every chunk left to right without overlapping matches. The number of merges is a small test value (`NET_MERGES`, currently 200 merges) for now; it can never exceed what `u16` allows.
+    - Runs the merge loop: pick the most frequent pair, give it the next free ID, and rewrite every chunk left to right without overlapping matches.The number of merges is a small test value (NET_MERGES, currently 5 merges for fast testing) for now; it can never exceed what `u16` allows.
     - **Saves the learned merges to `tokenizer_core/merges.bin`.** Each merge is one fixed 6-byte record: left token, right token, new token ID, each a little-endian `u16`, in the order the merges were learned. That order matters, because encoding must replay the merges in the same order. The file is listed in `.gitignore`.
+   - Breaks frequency ties deterministically using max_by with reverse lexicographical token ID ordering (smallest (left, right) pair wins).
+   - Reads merges.bin back with loader() and reconstructs the full ID-to-bytes HashMap vocabulary (0-255 raw bytes, 256, 257, and all merged token sequences) in build_vocab().
   - **Not done yet:**
-    - Nothing reads `merges.bin` back yet: there is no ID-to-bytes vocabulary, no encode and no decode.
     - Every iteration recounts all pairs over every chunk from scratch, and identical chunks (for example the word "the") are stored separately each time. This is fine for testing, but too slow for the full corpus. Planned: store each distinct chunk once with its count, and update pair counts incrementally after a merge.
-    - The tie rule is implicit (the last maximum in insertion order wins). Replace it with an explicit rule and log it in `docs/decisions.md`.
     - The input path is relative (`../dataset/arxiv_texts`) and the output goes to the current folder, so for now the program must be run from inside `tokenizer_core`.
   - **Open decisions:** the target vocabulary size (it sets the embedding table size, and with it a share of the parameter budget); whether the tokenizer should also train on the English text; whether the metadata lines (`title--`, `arxiv id--`, ...) stay in the training text; and whether a space should attach to the following word (currently spaces are separate chunks).
   - **Tests to add:** joining the chunks must reproduce the original text exactly; the number of `[cite]` occurrences in the text must equal the number of ID 256 in the encoded output (and likewise `<|endoftext|>` and 257); `merges.bin` size must be a multiple of 6 and equal 6 x the number of merges; decoding after encoding must give back the original text.

@@ -38,4 +38,15 @@ One entry per decision or dropped idea, with the reason. Code history lives in g
   - It is matched first in the regex and kept as one chunk, like `[cite]`, so merges can never split it or glue it to a neighbour.
   - Special tokens take the fixed IDs just above the raw bytes (256, 257), before any learned merge, so their IDs never change when the number of merges changes.
 - **Math text: strip LaTeX font commands and whitespace inside `$...$`.** `\mathrm`, `\mathbf`, `\it`, `\bf` and similar only change how a formula looks, not what it means, and each variant gives the tokenizer a different spelling of the same thing. Spaces inside math are removed for the same reason. To check on many papers: that nothing meaningful is lost (the `\beta` entry in the regex looks wrong and must be reviewed).
-- **One shared Unicode dictionary is still wanted.** The arXiv script now has the full list (ligatures, quotes, dashes, spaces, zero-width characters) but `data_extractor.py` still has the short one. Planned: one shared dictionary for all sources.
+
+
+## 2026-11-13
+
+- **Explicit BPE tie-breaking rule: smallest `(left, right)` token ID pair wins.** Replaced implicit `max_by_key` insertion-order tie resolution with an explicit `max_by` comparison: compare frequency first, and on a tie pick the lexicographically smallest `(left, right)` token ID tuple (`b.0.cmp(a.0)`).
+  - Reason: relying on `IndexMap` insertion order means changing file read order or switching to an incremental pair-counter later could silently change which merges get learned. Comparing token IDs directly guarantees identical merges regardless of traversal order.
+- **Vocabulary (`HashMap<u16, Vec<u8>>`) is rebuilt in RAM from `merges.bin`, not stored in a separate file.** `loader` reads the 6-byte records from `merges.bin`, and `build_vocab` reconstructs the byte sequences for `0..=255`, `256` (`[cite]`), `257` (`<|endoftext|>`), and every merged ID in creation order.
+  - Reason: `merges.bin` already encodes the full merge tree. Rebuilding the lookup table at startup takes under a millisecond and avoids keeping two files in sync or inventing a variable-length binary format for multi-byte tokens.
+- **TFLOPS benchmark (`architecture.py`) hardened for laptops and multi-GPU systems.**
+  - **12-second thermal soak + median reporting:** Replaced the 10-iteration warmup with a 12-second continuous matmul loop so laptop GPUs settle past short-term boost clocks into sustained TDP, and switched from mean to median TFLOPS to ignore background OS spikes.
+  - **Native BF16 only (`including_emulation=False`):** Checks `torch.cuda.is_bf16_supported(including_emulation=False)` on PyTorch 2.4+ (falling back to compute capability `>= 8.0` on older versions) so pre-Ampere GPUs use native FP32 instead of slow software-emulated BF16.
+  - **Vendor-to-PyTorch GPU index verification:** Sets `CUDA_DEVICE_ORDER=PCI_BUS_ID` before importing PyTorch and matches the vendor tool's reported GPU name against `torch.cuda.get_device_name()` (`resolve_pytorch_index`) so iGPU + dGPU or multi-GPU machines benchmark the selected card.
