@@ -1,16 +1,47 @@
+import os
 import shutil
 import subprocess
 import json
-import os
 import sys
 import csv
 import io
-import torch
 import time
+import statistics
+import inspect
+
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+import torch
 
 print("HARDWARE ARCHITECTURE CHECKER AND ANALYZER\n")
 
-def compute_TFLOPS(architecture_type,gpu_index=0,num_runs=10):
+def has_bf16_support(gpu_index:int)->bool:
+    if not torch.cuda.is_available():
+        return False
+    
+    sig=inspect.signature(torch.cuda.is_bf16_supported)
+
+    if "including_emulation" in sig.parameters:
+        with torch.cuda.device(gpu_index):
+            return torch.cuda.is_bf16_supported(including_emulation=False)
+    props=torch.cuda.get_device_properties(gpu_index)
+    return getattr(props,"major",0)>=8
+
+
+def resolve_pytorch_index(expected_name:str, fallback_idx:int)->int:
+    count=torch.cuda.device_count()
+    if count==0:
+        return fallback_idx
+    for i in range(count):
+        torch_name=torch.cuda.get_device_name(i)
+        if expected_name and (expected_name.lower() in torch_name.lower() or torch_name.lower() in expected_name.lower()):
+            return i
+    if 0<=fallback_idx<count:
+        return fallback_idx
+    else:
+        return 0
+
+
+def compute_TFLOPS(architecture_type,gpu_index=0,expected_name="",warmup_seconds=12.0,num_runs=10):
     if architecture_type=="cpu":
         print("\nSkipped TFLOPS calculation due to absence of GPU.")
         return 0.0
@@ -19,23 +50,28 @@ def compute_TFLOPS(architecture_type,gpu_index=0,num_runs=10):
     operations_per_run=20
 
     if architecture_type in ("cuda","modern-rocm","legacy-rocm"):
-        device=f"cuda:{gpu_index}"
+        verified_index=resolve_pytorch_index(expected_name,gpu_index)
+        device=f"cuda:{verified_index}"
     else:
         device="cpu"
         return 0.0
     
-    if torch.cuda.is_bf16_supported():
+    if has_bf16_support(verified_index):
         precision=torch.bfloat16
-        print("\nPRECISION-- bfloat16.")
+        print("\nPRECISION-- bfloat16.(Native hardware support checked.)")
     else:
         precision=torch.float32
-        print("\nPRECISION-- float32. Most suited bfloat16 is not supported.")
+        print("\nPRECISION-- float32. Native bfloat16 is not supported.(SLOW EMULATION IS AVOIDED COMPLETELY.)")
 
     matrix=torch.randn(n,n,device=device,dtype=precision)
 
-    for _ in range(10):
+    print("EXECUTING WARM UP TEST ON GPU TO SETTLE PAST BOOST CLOCKS--")
+    
+    warmup_start=time.perf_counter()
+
+    while (time.perf_counter()-warmup_start)<warmup_seconds:
         _=matrix @ matrix
-    torch.cuda.synchronize(device)    
+    torch.cuda.synchronize(device)
 
     for i in range(1,num_runs+1):
         torch.cuda.synchronize(device)   
@@ -53,9 +89,11 @@ def compute_TFLOPS(architecture_type,gpu_index=0,num_runs=10):
         tflops=work/(elapsed_time*(10**12))
         print(f"Achieved TFLOPS for run {i}--{tflops:.2f}\n")
         tflops_computed_list.append(tflops)
-    avg_tflops=sum(tflops_computed_list)/len(tflops_computed_list)
-    print(f"Average TFLOPS computed is--{avg_tflops}")
-    return avg_tflops
+
+    median_tflops=statistics.median(tflops_computed_list)
+    print(f"Median TFLOPS computed is--{median_tflops}")
+    return median_tflops
+
 
 def ask_training_time():
     while True:
@@ -80,6 +118,7 @@ def ask_training_time():
                     print("Invalid input.Please enter 'y' or 'n'\n")
         except ValueError:
             print("Please input a valid time limit.")
+
 
 def scan_hardware():
     targeted_gpus=[]
@@ -106,7 +145,7 @@ def scan_hardware():
                 gpu=gpu_conditions[0]
                 vram=int(gpu_conditions[1])
                 print(f"GPU is {gpu}.The VRAM is {vram}")
-                targeted_gpus.append(("cuda", vram, idx))
+                targeted_gpus.append(("cuda",vram,idx,gpu.strip()))
         except subprocess.SubprocessError:
             pass
     if shutil.which("amd-smi"):
@@ -123,7 +162,7 @@ def scan_hardware():
                 else:
                     vram_mib=vram_amd
                 print(f"GPU is {gpu_amd}.The VRAM is {vram_mib}")
-                targeted_gpus.append(("modern-rocm", vram_mib ,idx))
+                targeted_gpus.append(("modern-rocm", vram_mib, idx, gpu_amd.strip()))
         except(subprocess.SubprocessError,KeyError,json.JSONDecodeError):
             pass   
     if shutil.which("rocm-smi") or shutil.which("rocminfo"):
@@ -142,18 +181,19 @@ def scan_hardware():
                     else:
                         vram_legacy_mib=vram_amd_legacy
                     print(f"GPU is {gpu_amd_legacy}.The VRAM is {vram_legacy_mib}")
-                    targeted_gpus.append(("legacy-rocm", vram_legacy_mib, idx))
+                    targeted_gpus.append(("legacy-rocm", vram_legacy_mib, idx, gpu_amd_legacy.strip()))
             print("ROCm ARCHITECTURE DETECTED.")
         except (subprocess.SubprocessError,json.JSONDecodeError):
             pass    
 
     if len(targeted_gpus)==0:
-        return ("cpu", 0,0)
+        return ("cpu", 0, 0, "CPU")
     if len(targeted_gpus)==1:
-        return (targeted_gpus[0][0],targeted_gpus[0][1],targeted_gpus[0][2])
+        return targeted_gpus[0] 
     if len(targeted_gpus)>=2:
-        for index,(architecture,vram,native_idx) in enumerate(targeted_gpus):
-            print(f"[{index}] Architecture:{architecture}, VRAM:{vram}MB")
+        
+        for index,(architecture,vram,native_idx,name) in enumerate(targeted_gpus):
+            print(f"[{index}]--{name} --  Architecture:{architecture}, VRAM:{vram}MB")
         while True:
             try:
                 gpu_choice=int(input("SELECT A GPU INDEX NUMBER FOR TRAINING:\n"))
@@ -171,14 +211,19 @@ def identify_os():
         return base_path+".exe"
     return base_path
 
+
 def dataset_tokens():
     import data_extractor
     return data_extractor.main()
     
+
 if detected_hardware[0]=="cpu":
     print("NO DEDICATED AI-GPU DRIVERS DETECTED.")
 else:
-    tflops_computed=compute_TFLOPS(detected_hardware[0],gpu_index=int(detected_hardware[2]))
+    tflops_computed=compute_TFLOPS(detected_hardware[0],
+        gpu_index=int(detected_hardware[2]),
+        expected_name=detected_hardware[3]
+        )
     total_dataset_tokens=dataset_tokens()
     sizer_binary=identify_os()
     if sys.platform !="win32" and os.path.exists(sizer_binary):

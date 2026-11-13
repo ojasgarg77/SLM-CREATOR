@@ -1,8 +1,8 @@
-use std::{fs::{self, File}, io::{BufWriter, Write}};
+use std::{collections::HashMap, fs::{self, File}, io::{BufWriter,Write}};
 use regex::Regex;
 use indexmap::IndexMap;
 
-const NET_MERGES:u16=201;
+const NET_MERGES:u16=5;
 //NET_MERGES can never exceed 65,276 because u16 limits us to 65,535.
 
 fn read_files()->String{
@@ -101,20 +101,29 @@ fn bpe(text: &str){
 
     let mut writer=BufWriter::new(file);
 
-    for iteration in 1.. NET_MERGES{
+    for iteration in 0.. NET_MERGES{
         let pair_counts=count_pairs(&tokenized_chunks);
         
-        if let Some((best_pair,frequency))=pair_counts.iter().max_by_key(|&(_,count)|count){
+        let best_option_pair=pair_counts.iter().max_by(|a,b|{
             //The .iter.max_by_key() part loops through the entire database and ignores the token themselves and looks only at the count.
             //And finds the when in which the count is the highest
 
+            let freq=a.1.cmp(b.1);
+            freq.then_with(||b.0.cmp(a.0))
+        });
+
+
+        if let Some((best_pair,frequency))=best_option_pair{
             println!("ITERATION--{:2} MERGING PAIR--{:?} (FREQUENCY--{}) INTO TOKEN ID{}",
         iteration,best_pair,frequency,next_token_id);
         writer.write_all(&best_pair.0.to_le_bytes())
+        //Writes bytes 0-1.
             .expect("FAILED TO WRITE LEFT TOKEN BYTE.");
         writer.write_all(&best_pair.1.to_le_bytes())
+        //Writes bytes 2-3.
             .expect("FAILED TO WRITE RIGHT TOKEN BYTE.");
         writer.write_all(&next_token_id.to_le_bytes())
+        //Writes bytes 4-5.
             .expect("FAILED TO WRITE MERGED TOKEN BYTE.");                
 
         //ACTUAL IMPLEMENTATION OF THE BPE ALGORITHM (IMPLEMENTATION OF PAPER--"INCREMENTAL BPE TOKENIZATION")
@@ -152,10 +161,51 @@ fn bpe(text: &str){
         writer.flush()
             .expect("FAILED TO FLUSH DATA TO SSD.");
     }
-    println!("SUCCESS:6 BYTE PACKED RULES ARE WRITTEN IN THE BINARY FILE COMPLETELY.");
+    println!("\nSUCCESS:6 BYTE PACKED RULES ARE WRITTEN IN THE BINARY FILE COMPLETELY.\n");
+}
+
+fn loader(file_path:&str)->Vec<((u16,u16),u16)> {
+    let net_bytes=fs::read(file_path)
+        .expect("FAILED TO READ BINARY FILE.");
+    let mut merges=Vec::new();
+
+    for chunk in net_bytes.chunks_exact(6){
+        let left=u16::from_le_bytes(chunk[0..2].try_into().unwrap());
+        //Grabs the first 2 chunks.
+
+        let right=u16::from_le_bytes(chunk[2..4].try_into().unwrap());
+        //Grabs the next 2 chunks.
+
+        let merged_id=u16::from_le_bytes(chunk[4..6].try_into().unwrap());
+        //Grabs the last 2 chunks.
+
+        merges.push(((left,right),merged_id));
+    }
+    merges
+}
+
+fn build_vocab(merges:&[((u16,u16),u16)])->HashMap<u16,Vec<u8>>{
+    let mut vocab:HashMap<u16,Vec<u8>>=HashMap::new();
+    for i in 0..=255u16 {
+        vocab.insert(i,vec![i as u8]);
+    }
+    vocab.insert(256,b"[cite]".to_vec());
+    vocab.insert(257,b"<|endoftext|>".to_vec());
+    
+    for &((left,right),merged_id) in merges{
+        let mut combined=vocab[&left].clone();
+        combined.extend_from_slice(&vocab[&right]);
+        vocab.insert(merged_id,combined);
+    }
+    vocab
 }
 
 fn main(){
     let file_contents=read_files();
     bpe(&file_contents);
+
+    let merges=loader("merges.bin");
+    println!("LOADED {} MERGE RULES.",merges.len());
+
+    let vocab=build_vocab(&merges);
 }
