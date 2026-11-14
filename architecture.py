@@ -165,7 +165,7 @@ def scan_hardware():
                 targeted_gpus.append(("modern-rocm", vram_mib, idx, gpu_amd.strip()))
         except(subprocess.SubprocessError,KeyError,json.JSONDecodeError):
             pass   
-    if shutil.which("rocm-smi") or shutil.which("rocminfo"):
+    elif shutil.which("rocm-smi") or shutil.which("rocminfo"):
         try:
             command_amd_legacy=["rocm-smi", "--showproductname", "--showmeminfo", "vram", "--csv"]
             output_cmd_amd_legacy=subprocess.run(command_amd_legacy, **run_settings)

@@ -5,6 +5,7 @@ import requests
 from bs4 import BeautifulSoup
 import time
 from bs4 import NavigableString
+import unicodedata
 
 def clean_paper_text(text:str)->str:
     text=text.replace("\u200b","").replace("\u200c","").replace("\u200d","").replace("\u00ad","")
@@ -51,9 +52,6 @@ def clean_math_output(soup):
             else:
                 math_tag.decompose()
     return soup
-
-def lowercase_txt(text:str)->str:
-    return text.lower()
 
 def process_prose_nodes(container_nodes):
 
@@ -127,7 +125,7 @@ def process_prose_nodes(container_nodes):
 
         orignal_text=node.string
         if orignal_text:
-            cleaned_text=orignal_text.lower()
+            cleaned_text=unicodedata.normalize("NFKC", orignal_text).lower()
             for unicode_char,replacements in LIGATURE_AND_UNICODE_DICTIONARY.items():
                 cleaned_text=cleaned_text.replace(unicode_char,replacements)
             node.replace_with(cleaned_text)
@@ -253,9 +251,9 @@ def download_txt_arxiv(download_dir:Path,query:str="cat:cs.LG AND 'neural networ
 
 
                 file_content=(
-                    f"title--{paper.title.lower()}\n"
+                    f"title--{unicodedata.normalize('NFKC', paper.title).lower()}\n"
                     f"arxiv id--{clean_arxiv_id}\n"
-                    f"abstract--{paper.summary.lower()}\n"
+                    f"abstract--{unicodedata.normalize('NFKC', paper.summary).lower()}\n"
                     f"body--{full_paper}\n\n")
 
 
@@ -284,7 +282,13 @@ def download_txt_arxiv(download_dir:Path,query:str="cat:cs.LG AND 'neural networ
 
 if __name__=="__main__":
     target_directory=Path(__file__).parent/"dataset"/"arxiv_texts"
-    query_string='(cat:cs.CL OR cat:cs.LG) AND ("language model" OR "transformer" OR "sequence modeling" OR "autoregressive" OR "text generation")'
+    query_string=(
+    '(cat:cs.LG OR cat:cs.NE OR stat.ML) AND '
+    '("neural network" OR "deep learning" OR "backpropagation" OR "transformer" OR '
+    '"attention mechanism" OR "gradient descent" OR "layer normalization" OR "activation function") '
+    'ANDNOT ("clinical" OR "survey" OR "medical" OR "forecasting")'
+    )
+
     input("INTERNET CONNECTION IS REQUIRED FOR THIS STEP\n PRESS ENTER TO CONTINUE--")
     while True:
         user_input=input("\nHOW MANY PAPER DO YOU WANT TO DOWNLOAD?\n")

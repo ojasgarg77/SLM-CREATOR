@@ -10,7 +10,7 @@ The v1 target is a model hyperspecialized in **neural networks**, built for my o
 
 This is an open-ended personal learning project (roughly a 5-6 month effort, with no fixed deadline). I am learning by building: **the entire codebase is handwritten by me**, piece by piece. AI is used as a tutor for explanations and concepts, not as a source of finished code. Design decisions and dropped ideas, with reasons, are logged in [docs/decisions.md](docs/decisions.md).
 
-I do not own a GPU. The GPU code paths (NVIDIA, modern AMD, legacy AMD) cannot be run on my machine, so for GPU edge cases I rely on AI-described outputs (for example, what the vendor tools would print on various hardware) rather than AI-written code, and I test my parsing against mock tool output. Real training is planned on a laptop with an RTX 4050 (6 GB VRAM).
+I do not own a GPU for my primary development environment. The NVIDIA GPU code paths have been successfully verified live, while modern and legacy AMD GPU paths rely on AI-described outputs and community testing. Real training and benchmarking are tested on a laptop with an RTX 3050 (6 GB VRAM).
 
 ## Planned pipeline
 
@@ -27,13 +27,13 @@ I do not own a GPU. The GPU code paths (NVIDIA, modern AMD, legacy AMD) cannot b
 
 ## Current status
 
-- ✅ **Hardware detection** (`architecture.py`): detects NVIDIA (`nvidia-smi`), modern AMD (`amd-smi`), legacy AMD (`rocm-smi`/`rocminfo`), or CPU-only. • Each detected GPU is recorded as (architecture, VRAM in MiB, device index, GPU name). If several GPUs are found, the user picks one, and the chosen device index is passed on to the benchmark. Also asks for the training-time budget in hours. Tested live on a CPU-only machine; the GPU paths have been tested against mock tool output only.
+- ✅ **Hardware detection** (`architecture.py`): detects NVIDIA (`nvidia-smi`), modern AMD (`amd-smi`), legacy AMD (`rocm-smi`/`rocminfo`), or CPU-only. • Each detected GPU is recorded as (architecture, VRAM in MiB, device index, GPU name). If several GPUs are found, the user picks one, and the chosen device index is passed on to the benchmark. Also asks for the training-time budget in hours. Tested live on an RTX 3050 laptop GPU (6144 MiB VRAM); the AMD GPU paths remain open for live community testing.
 
 - ✅ **TFLOPS benchmark** (`architecture.py`): measures the machine's real matmul speed with a 4096x4096 benchmark on the selected GPU (skipped on CPU-only systems).
   - Runs in **bf16**  when native hardware bf16 is supported (checking `torch.cuda.is_bf16_supported(including_emulation=False)` on PyTorch 2.4+ or compute capability >= 8.0 on older versions, avoiding slow software-emulated bf16), otherwise falls back to fp32 and says so. The benchmark precision must match the training precision, otherwise the efficiency factor is meaningless.
   -  Runs a 12-second thermal warmup soak to settle past laptop boost clocks, then times 10 runs of 20 back-to-back multiplications each and reports the median TFLOPS instead of the mean.Does 10 warmup multiplications, then times several runs of 20 back-to-back multiplications each, with `torch.cuda.synchronize` before and after each timed window.
   - Sets `CUDA_DEVICE_ORDER=PCI_BUS_ID` before importing PyTorch and matches the vendor tool's GPU name against `torch.cuda.get_device_name()` (`resolve_pytorch_index`) so the `cuda:X` index targets the selected card.
-  - Not yet run on the target GPU.
+  - Successfully verified live on an RTX 3050 laptop GPU (6144 MiB VRAM, native `bfloat16` support, median ~8.895 TFLOPS).
 
 - ✅ **Sizing** (`sizer_core`, Rust): memory, time and data limits all work, with a 100M parameter cap.
   - Python sends four values to the Rust program over standard input, one per line: VRAM (MiB), training hours, measured TFLOPS, and the total number of training tokens. The Rust side does not care which precision produced the TFLOPS number.
@@ -90,7 +90,7 @@ The efficiency factor answers: "of the speed a pure matmul benchmark reaches, ho
 1. Count the tokens per second the training loop processes.
 2. Multiply by 6 x the parameter count to get the FLOPs per second actually achieved (about 8 x if gradient checkpointing is used).
 3. Divide by the benchmark TFLOPS (measured in the same precision).
-4. Run for long enough that thermal throttling shows up, then put the result into `sizer_core/src/main.rs`.
+4. Run for long enough that thermal throttling shows up, then put the result into `sizer_core/src/main.rs`.(completed)
 
 ## Setup
 
@@ -100,7 +100,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-`requirements.txt` contains `torch` (the TFLOPS benchmark), `pymupdf` (PDF extraction), `datasets` and `python-dotenv` (the English download), `arxiv` and `requests` (finding and fetching arXiv papers), and `beautifulsoup4` (parsing the ar5iv HTML). The correct PyTorch build depends on your hardware (NVIDIA, AMD, or CPU-only), so use the selector on the PyTorch website if the default `pip install torch` does not match your machine.
+`requirements.txt` contains `torch` (the TFLOPS benchmark), `datasets` and `python-dotenv` (the English download), `arxiv` and `requests` (finding and fetching arXiv papers), and `beautifulsoup4` (parsing the ar5iv HTML). The correct PyTorch build depends on your hardware (NVIDIA, AMD, or CPU-only), so use the selector on the PyTorch website if the default `pip install torch` does not match your machine.
 
 ### Hugging Face token (`.env`)
 
@@ -135,13 +135,10 @@ Rebuild with `--release` after any change to the Rust code, because `architectur
 The `dataset/` folder is not part of the repository (it is listed in `.gitignore`), because it holds large text files and unchecked copyright data. It looks like this:
 
 ```
-dataset/
-  pdfs/              PDFs you add by hand
+dataset/             
   arxiv_texts/       created by download_arxiv_text.py
   english_dataset/   created by download_english_data.py
 ```
-
-Without `dataset/pdfs/`, the extractor prints "THE DIRECTORY DOES NOT EXIST." and counts only the text files.
 
 ### Running
 
@@ -170,9 +167,9 @@ cargo run --release
 
 ## Contributing
 
-Contributions are welcome! Since this is a hardware-aware project currently being developed in a CPU-only environment, community testing is incredibly valuable right now.
+Contributions are welcome! Since the NVIDIA hardware paths have been successfully validated, community testing is now focused entirely on **AMD GPUs**.
 
-If you have an NVIDIA or AMD GPU, you can help immediately by running our architecture scripts and reporting how they handle your system topology.
+If you have an AMD GPU, you can help immediately by running our architecture scripts and reporting how they handle your system topology.
 
 Please check out our active tracking issue to help us validate:
 👉 **[Issue #1: Help Needed: Live testing & validation of GPU detection paths (NVIDIA/AMD)](https://github.com/ojasgarg77/SLM-CREATOR/issues/1#issue-6224761352)**

@@ -48,16 +48,8 @@ LIGATURE_AND_UNICODE_DICTIONARY={
     "\u00ad": "",
     }
     
-def find_pdf_files():
-    pdf_list=[]
-    base_path=Path(__file__).parent/"dataset"/"pdfs"
-    if not base_path.is_dir():
-        print("""THE DIRECTORY ("pdfs") DOES NOT EXIST.""")
-        return pdf_list
-    for file_path in sorted(base_path.glob("*.pdf")):
-        print(f"PDF {file_path.name} found.")
-        pdf_list.append(file_path)
-    return pdf_list
+
+TRANSLATION_TABLE=str.maketrans(LIGATURE_AND_UNICODE_DICTIONARY)
 
 def get_english_tokens():
     english_txt_files=[]
@@ -81,29 +73,18 @@ def get_arxiv_tokens():
         arxiv_txt_files.append(arxiv_files)
     return arxiv_txt_files
 
+def clean_text(text:str)->str:
+    text=unicodedata.normalize("NFKC",text)
+    return text.translate(TRANSLATION_TABLE)
+
 def total_char_count_dic():  
     output_counts={}  
-
-    pdf_files=find_pdf_files()
-    for path in pdf_files:
-        count=0
-        with pymupdf.open(path) as document:
-            all_text=""
-            for page in document:
-                all_text+=page.get_text()
-            
-            for fancy,plain in LIGATURE_AND_UNICODE_DICTIONARY.items():
-                all_text=all_text.replace(fancy,plain)
-            
-            for line in all_text.splitlines():
-                count+=len(line)
-        output_counts[path.name]=count
-
 
     arxiv_files=get_arxiv_tokens()
     for path in arxiv_files:
         count=0
         all_text=path.read_text(encoding="utf-8",errors="ignore")
+        all_text=clean_text(all_text)
         for fancy,plain in LIGATURE_AND_UNICODE_DICTIONARY.items():
             all_text=all_text.replace(fancy,plain)
         for line in all_text.splitlines():
