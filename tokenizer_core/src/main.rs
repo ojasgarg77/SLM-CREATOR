@@ -1,8 +1,8 @@
-use std::{collections::HashMap, fs::{self, File}, io::{BufWriter,Write}};
+use std::{collections::HashMap, fs::{self, File}, io::{BufWriter,Write}, usize};
 use regex::Regex;
 use indexmap::IndexMap;
 
-const NET_MERGES:u16=5;
+const NET_MERGES:u16=16126;
 //NET_MERGES can never exceed 65,276 because u16 limits us to 65,535.
 
 fn read_files()->String{
@@ -10,7 +10,7 @@ fn read_files()->String{
     let mut all_contents=String::new();
 
     let entries: fs::ReadDir=fs::read_dir(folder_location)
-    .expect("ERROR IN READING DIRECTORY FILES.");
+        .expect("ERROR IN READING DIRECTORY FILES.");
 
     for entry in entries{
         if let Ok(entry) =entry{
@@ -30,13 +30,13 @@ fn read_files()->String{
 //i also push 3 new lines after each line.
 
 
-fn count_pairs(tokenized_chunks:&[Vec<u16>])->IndexMap<(u16,u16),usize>{
+fn count_pairs(tokenized_chunks:&[(Vec<u16>,usize)])->IndexMap<(u16,u16),usize>{
 
     let mut pair_counts=IndexMap::new();
     //This line creates a new indexmap being pair_counts. an indexmap is basically a hybrid data structure containing 2 things a standard HASHMAP and a Vector(in the form of array.)
     //A hashmap is basically a long dictionary which matches a key to value this is wht converts text to a numeric array index this is basically the adress for a computer
     //Reason for choosing IndexMap is logged in "decisions.md"
-    for chunk in tokenized_chunks{
+    for (chunk,freq) in tokenized_chunks{
         if chunk.len()<2{
             continue;
         }
@@ -44,7 +44,7 @@ fn count_pairs(tokenized_chunks:&[Vec<u16>])->IndexMap<(u16,u16),usize>{
 
         for pair in chunk.windows(2){
             let p=(pair[0],pair[1]);
-            *pair_counts.entry(p).or_insert(0)+=1;
+            *pair_counts.entry(p).or_insert(0)+=*freq;
     //This counts how many times every adjacent pair of tokens appear across text chunks.
     //here p is a tuple which stores the same. if it alrdy exists we dont count it. initializes to 0--if pair is new,and then increases count to 1.
         }
@@ -52,6 +52,18 @@ fn count_pairs(tokenized_chunks:&[Vec<u16>])->IndexMap<(u16,u16),usize>{
     pair_counts
 }
 
+fn adjust_pairs(pair_count:&mut IndexMap<(u16,u16),usize>,pair:(u16,u16),delta:isize){
+    if delta>0{
+        *pair_count.entry(pair).or_insert(0)+=delta as usize;
+    }else if delta<0{
+        if let Some(c)=pair_count.get_mut(&pair){
+            *c=c.saturating_sub((-delta) as usize);
+            if *c==0{
+                pair_count.swap_remove(&pair);
+            }
+        } 
+    }
+}
 
 fn bpe(text: &str){
     let clean_text_way=Regex::new(r"<\|endoftext\|>|\[cite\]|\$|\w+|\s+|[^\w\s]").unwrap();
@@ -66,7 +78,7 @@ fn bpe(text: &str){
         //A FAT pointer is of 16 bytes it basically combines a standard memory address with additional metadata.
     }
 
-    let mut tokenized_chunks:Vec<Vec<u16>>=Vec::new();
+    let mut chunk_counts:HashMap<Vec<u16>,usize>=HashMap::new();
     //This line creates tokenized_chunks which is basically a list inside another list, in simple terms a vector inside of vector.
     //It is used as bpe must strictly respect boundaries and it is forbidden from merging the end of one word with the beginning of new word.
     //This helps us sandbox everything in its private sandbox. 
@@ -86,8 +98,10 @@ fn bpe(text: &str){
             //This iterator is then converted into a concrete collection.
             //It forces the iterator to execute,process the elements and gathers them in the desired data structure which is Vector in this context.
         };
-        tokenized_chunks.push(byte_tokens);
+        *chunk_counts.entry(byte_tokens).or_insert(0)+=1
     }
+
+    let mut tokenized_chunks:Vec<(Vec<u16>,usize)>=chunk_counts.into_iter().collect();
 
     let mut next_token_id:u16=258;
     //We chose 258 for new merged tokens as avoids overlapping with any pre existing characters or special tokens.
@@ -101,8 +115,8 @@ fn bpe(text: &str){
 
     let mut writer=BufWriter::new(file);
 
+    let mut pair_counts=count_pairs(&tokenized_chunks);
     for iteration in 0.. NET_MERGES{
-        let pair_counts=count_pairs(&tokenized_chunks);
         
         let best_option_pair=pair_counts.iter().max_by(|a,b|{
             //The .iter.max_by_key() part loops through the entire database and ignores the token themselves and looks only at the count.
@@ -114,8 +128,14 @@ fn bpe(text: &str){
 
 
         if let Some((best_pair,frequency))=best_option_pair{
-            println!("ITERATION--{:2} MERGING PAIR--{:?} (FREQUENCY--{}) INTO TOKEN ID{}",
-        iteration,best_pair,frequency,next_token_id);
+            let best_pair=*best_pair;
+            let frequency=*frequency;
+            pair_counts.swap_remove(&best_pair);
+
+            if iteration%500==0 || iteration==NET_MERGES-1{
+                println!("ITERATION--{:2} MERGING PAIR--{:?} (FREQUENCY--{}) INTO TOKEN ID{}\n  |\n  |\n  |",
+                iteration,best_pair,frequency,next_token_id);
+            }
         writer.write_all(&best_pair.0.to_le_bytes())
         //Writes bytes 0-1.
             .expect("FAILED TO WRITE LEFT TOKEN BYTE.");
@@ -128,17 +148,27 @@ fn bpe(text: &str){
 
         //ACTUAL IMPLEMENTATION OF THE BPE ALGORITHM (IMPLEMENTATION OF PAPER--"INCREMENTAL BPE TOKENIZATION")
 
-            for chunk in &mut tokenized_chunks{
+            for (chunk, freq) in &mut tokenized_chunks{
+                if !chunk.windows(2).any(|w| w[0]==best_pair.0 && w[1]==best_pair.1){
+                    continue;
+                }
+
+                for pair in chunk.windows(2){
+                    let p=(pair[0],pair[1]);
+                    if p !=best_pair{
+                        adjust_pairs(&mut pair_counts,p,-(*freq as isize));
+                    }
+                }
                 let mut i =0;
                 //An index pointer "i" is initialized at 0. It is responsible for tracking current token position as the code moves through the chunks.
 
-                let mut merged_chunk=Vec::new();
+                let mut merged_chunk=Vec::with_capacity(chunk.len());
                 //This is the vector in which newly compressed version of the chunk is going to be built.
 
                 while i<chunk.len(){
                     if i+1 < chunk.len() && chunk[i] == best_pair.0 && chunk[i+1]==best_pair.1{
                         //This part acts as a conditional safety check checking if a neighbouring token even exists--i+1 < chunk.len()
-                        //And the second part checks if the current token and its neighbour perfectly match the winning pair--chunk[i] == best_pair.0 && chunk[i+1]==best_pair.1
+                        //And the second part checks if the current token and its neighbour perfectly match the winning pair--chunk[i] == best_pair.0 && chunk[i+1]==best_pair.1                        
                         merged_chunk.push(next_token_id);
                         i+=2;
                         // i is incremented by 2 as 2 characters have been processed.
@@ -146,6 +176,9 @@ fn bpe(text: &str){
                         merged_chunk.push(chunk[i]);
                         i+=1;
                     }
+                }
+                for pair in merged_chunk.windows(2){
+                    adjust_pairs(&mut pair_counts,(pair[0],pair[1]),*freq as isize);
                 }
                 *chunk=merged_chunk;
                 //This line derefrences the orignal chunk variable and completely replaces it with the newly compressed merged_chunk from scratchpad.
@@ -158,9 +191,9 @@ fn bpe(text: &str){
             println!("NO MORE PAIRS FOUND FOR MERGING. STOPPING EARLY");
             break;
         }
-        writer.flush()
-            .expect("FAILED TO FLUSH DATA TO SSD.");
     }
+    writer.flush()
+        .expect("FAILED TO FLUSH DATA TO SSD.");
     println!("\nSUCCESS:6 BYTE PACKED RULES ARE WRITTEN IN THE BINARY FILE COMPLETELY.\n");
 }
 
@@ -207,5 +240,5 @@ fn main(){
     let merges=loader("merges.bin");
     println!("LOADED {} MERGE RULES.",merges.len());
 
-    let vocab=build_vocab(&merges);
+    let _vocab=build_vocab(&merges);
 }
