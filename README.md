@@ -27,13 +27,13 @@ I do not own a GPU for my primary development environment. The NVIDIA GPU code p
 
 ## Current status
 
-- ✅ **Hardware detection** (`architecture.py`): detects NVIDIA (`nvidia-smi`), modern AMD (`amd-smi`), legacy AMD (`rocm-smi`/`rocminfo`), or CPU-only. • Each detected GPU is recorded as (architecture, VRAM in MiB, device index, GPU name). If several GPUs are found, the user picks one, and the chosen device index is passed on to the benchmark. Also asks for the training-time budget in hours. Tested live on an RTX 3050 laptop GPU (6144 MiB VRAM); the AMD GPU paths remain open for live community testing.
+- ✅ **Hardware detection** (`architecture.py`): detects NVIDIA (`nvidia-smi`), modern AMD (`amd-smi`), legacy AMD (`rocm-smi`/`rocminfo`), or CPU-only. Each detected GPU is recorded as (architecture, VRAM in MiB, device index, GPU name). If several GPUs are found, the user picks one, and the chosen device index is passed on to the benchmark. Also asks for the training-time budget in hours. Tested live on an RTX 3050 laptop GPU (6144 MiB VRAM); the AMD GPU paths remain open for live community testing.
 
 - ✅ **TFLOPS benchmark** (`architecture.py`): measures the machine's real matmul speed with a 4096x4096 benchmark on the selected GPU (skipped on CPU-only systems).
-  - Runs in **bf16**  when native hardware bf16 is supported (checking `torch.cuda.is_bf16_supported(including_emulation=False)` on PyTorch 2.4+ or compute capability >= 8.0 on older versions, avoiding slow software-emulated bf16), otherwise falls back to fp32 and says so. The benchmark precision must match the training precision, otherwise the efficiency factor is meaningless.
-  -  Runs a 12-second thermal warmup soak to settle past laptop boost clocks, then times 10 runs of 20 back-to-back multiplications each and reports the median TFLOPS instead of the mean.Does 10 warmup multiplications, then times several runs of 20 back-to-back multiplications each, with `torch.cuda.synchronize` before and after each timed window.
+  - Runs in **bf16** when native hardware bf16 is supported (checking `torch.cuda.is_bf16_supported(including_emulation=False)` on PyTorch 2.4+ or compute capability >= 8.0 on older versions, avoiding slow software-emulated bf16), otherwise falls back to fp32 and says so. The benchmark precision must match the training precision, otherwise the efficiency factor is meaningless.
+  - Runs a 12-second thermal warmup soak to settle past laptop boost clocks, then times 10 runs of 20 back-to-back multiplications each, with `torch.cuda.synchronize` before and after each timed window, and reports the **median** TFLOPS instead of the mean.
   - Sets `CUDA_DEVICE_ORDER=PCI_BUS_ID` before importing PyTorch and matches the vendor tool's GPU name against `torch.cuda.get_device_name()` (`resolve_pytorch_index`) so the `cuda:X` index targets the selected card.
-  - Successfully verified live on an RTX 3050 laptop GPU (6144 MiB VRAM, native `bfloat16` support, median ~8.895 TFLOPS).
+  - Verified live on an RTX 3050 laptop GPU (6144 MiB VRAM, native `bfloat16` support, median ~8.895 TFLOPS).
 
 - ✅ **Sizing** (`sizer_core`, Rust): memory, time and data limits all work, with a 100M parameter cap.
   - Python sends four values to the Rust program over standard input, one per line: VRAM (MiB), training hours, measured TFLOPS, and the total number of training tokens. The Rust side does not care which precision produced the TFLOPS number.
@@ -52,14 +52,14 @@ I do not own a GPU for my primary development environment. The NVIDIA GPU code p
     - Replacing in-text citations with a `[cite]` placeholder.
     - Filtering out author info, affiliations, bibliographies, footnotes, figures, and irrelevant tables.
     - Skipping existing files and handling/deleting corrupt or empty files.
-  - `data_extractor.py`: scans PDFs in `dataset/pdfs/`, text files in `dataset/arxiv_texts/`, and text files in `dataset/english_dataset/`. It extracts text from PDFs using PyMuPDF, cleans typographic ligatures (such as "ﬀ" to "ff", "ﬁ" to "fi", etc.) using `LIGATURE_AND_UNICODE_DICTIONARY`, counts characters across lines for all sources, and estimates total tokens (`main()`) at 4 characters per token to pass back to `architecture.py`. The 4 characters per token figure is a rough guess until the real tokenizer exists.
+  - `data_extractor.py`: scans the text files in `dataset/arxiv_texts/` and `dataset/english_dataset/`. It cleans typographic ligatures (such as "ﬀ" to "ff", "ﬁ" to "fi", etc.) using `LIGATURE_AND_UNICODE_DICTIONARY`, counts characters across lines for all sources, and estimates total tokens (`main()`) at 4 characters per token to pass back to `architecture.py`. The 4 characters per token figure is a rough guess until the real tokenizer exists. PDF input was removed; all arXiv text now comes from the ar5iv HTML download.
     - The `\beta` entry in the `\mathrm|\mathit|...` math regex looks like a leftover; check that it does not eat real `\beta` symbols.
   - To do (arXiv):
     - Check why some papers (for example Adam, 1412.6980) appear to convert only partially, and add a check for partial pages.
     - Re-run the table rule on more papers to confirm it.
     - Decide what mentions like "Eq. 2" should become now that equation labels are dropped (for example a placeholder token, like `[cite]`).
     - Confirm the LaTeX style stripping with frequency counts over many papers.
-  - To do (cleaning, PDFs and English data): normalize the spacing around punctuation in the English data, drop ebook boilerplate and URL lines, share one cleaning function (and one Unicode dictionary) between all sources (the extractor still uses the short dictionary, the arXiv script the full one), keep paragraph breaks in PDFs, and handle words split across lines by hyphens.
+  - To do (cleaning, English data): normalize the spacing around punctuation in the English data, drop ebook boilerplate and URL lines, and share one cleaning function (and one Unicode dictionary) between all sources (the extractor still uses the short dictionary, the arXiv script the full one).
   - To do (data): collect much more on-topic neural-network text, because on-topic text is only a small share of the current mix and, once the benchmark is fixed, the data limit is likely to be the binding one. Cleaned arXiv papers are much shorter than raw PDFs, so the number of papers needed is likely higher than first estimated; measure tokens per usable paper on a sample.
 
 - 🔧 **Tokenizer** (`tokenizer_core`, Rust, work in progress): a byte-level BPE tokenizer trained from scratch. `[cite]` and `$` must each stay a single chunk, and whitespace must be preserved exactly.
@@ -67,16 +67,24 @@ I do not own a GPU for my primary development environment. The NVIDIA GPU code p
   - **Done so far:**
     - Reads every `.txt` file in `dataset/arxiv_texts/` and joins them, with an `<|endoftext|>` marker and blank lines after each paper, so documents are never run together.
     - Splits the text into chunks with a regex (`regex` crate): `<|endoftext|>`, the `[cite]` placeholder, `$`, words, whitespace runs, and single punctuation characters. `[cite]` becomes the single ID 256, `<|endoftext|>` the single ID 257; every other chunk becomes its UTF-8 bytes widened to `u16`. Merges never cross a chunk boundary.
-    - Counts adjacent token pairs inside each chunk with an `IndexMap`, so that equally frequent pairs are always visited in the same order and two runs on the same data give the same result.
-    - Runs the merge loop: pick the most frequent pair, give it the next free ID, and rewrite every chunk left to right without overlapping matches.The number of merges is a small test value (NET_MERGES, currently 5 merges for fast testing) for now; it can never exceed what `u16` allows.
-    - **Saves the learned merges to `tokenizer_core/merges.bin`.** Each merge is one fixed 6-byte record: left token, right token, new token ID, each a little-endian `u16`, in the order the merges were learned. That order matters, because encoding must replay the merges in the same order. The file is listed in `.gitignore`.
-   - Breaks frequency ties deterministically using max_by with reverse lexicographical token ID ordering (smallest (left, right) pair wins).
-   - Reads merges.bin back with loader() and reconstructs the full ID-to-bytes HashMap vocabulary (0-255 raw bytes, 256, 257, and all merged token sequences) in build_vocab().
+    - **Stores each distinct chunk once, with a count.** A word like "the" appears thousands of times, but it is only merged once and its pairs are counted once, multiplied by how often the chunk occurs.
+    - **Counts pairs once, then updates incrementally.** All adjacent pairs are counted (weighted by chunk count) before the first merge. After each merge, only the chunks that contain the winning pair are touched: their old pairs are subtracted from the counts and the pairs of the rewritten chunk are added. The winning pair's own entry is removed.
+    - Runs the merge loop: pick the most frequent pair, give it the next free ID, and rewrite the affected chunks left to right without overlapping matches.
+    - **Breaks frequency ties with an explicit rule:** the pair with the smallest `(left, right)` token IDs wins (see `docs/decisions.md`). The result no longer depends on the order the chunks or pairs happen to be visited in.
+    - **Number of merges:** `NET_MERGES` is currently 16,126, which gives a vocabulary of 16,384 tokens (256 bytes + 2 special tokens + 16,126 merges). It can never exceed what `u16` allows. Progress is printed every 500 iterations.
+    - **Saves the learned merges to `tokenizer_core/merges.bin`.** Each merge is one fixed 6-byte record: left token, right token, new token ID, each a little-endian `u16`, in the order the merges were learned. That order matters, because encoding must replay the merges in the same order. The file is written through a buffer and flushed once at the end, and is listed in `.gitignore`.
+    - Reads `merges.bin` back with `loader()` and rebuilds the full ID-to-bytes vocabulary in memory (`build_vocab()`): 0-255 raw bytes, 256, 257, and every merged token as the bytes of its left part followed by its right part.
   - **Not done yet:**
-    - Every iteration recounts all pairs over every chunk from scratch, and identical chunks (for example the word "the") are stored separately each time. This is fine for testing, but too slow for the full corpus. Planned: store each distinct chunk once with its count, and update pair counts incrementally after a merge.
+    - No encode and no decode: the vocabulary is built but not used yet.
+    - The incremental pair counts have not been checked against a full recount (see tests below).
     - The input path is relative (`../dataset/arxiv_texts`) and the output goes to the current folder, so for now the program must be run from inside `tokenizer_core`.
-  - **Open decisions:** the target vocabulary size (it sets the embedding table size, and with it a share of the parameter budget); whether the tokenizer should also train on the English text; whether the metadata lines (`title--`, `arxiv id--`, ...) stay in the training text; and whether a space should attach to the following word (currently spaces are separate chunks).
-  - **Tests to add:** joining the chunks must reproduce the original text exactly; the number of `[cite]` occurrences in the text must equal the number of ID 256 in the encoded output (and likewise `<|endoftext|>` and 257); `merges.bin` size must be a multiple of 6 and equal 6 x the number of merges; decoding after encoding must give back the original text.
+  - **Open decisions:** whether 16,384 is the final vocabulary size (it sets the embedding table size, and with it a share of the parameter budget); whether the tokenizer should also train on the English text; whether the metadata lines (`title--`, `arxiv id--`, ...) stay in the training text; and whether a space should attach to the following word (currently spaces are separate chunks).
+  - **Tests to add:**
+    - Training with incremental updates must give exactly the same merges as the old way (recount everything every iteration) on a small corpus; also compare the pair counts against a full recount every few merges.
+    - Joining the chunks must reproduce the original text exactly.
+    - The number of `[cite]` occurrences in the text must equal the number of ID 256 in the encoded output (and likewise `<|endoftext|>` and 257).
+    - `merges.bin` size must be a multiple of 6 and equal 6 x the number of merges. `loader()` currently ignores a partial record at the end of the file without any error, so a damaged file would load silently.
+    - Decoding after encoding must give back the original text.
 
 - ⏳ Dataset specialization matching: not started.
 - ⏳ Rust ingestion pipeline (batching and streaming; tokenizing builds on `tokenizer_core`): not started.
@@ -90,7 +98,7 @@ The efficiency factor answers: "of the speed a pure matmul benchmark reaches, ho
 1. Count the tokens per second the training loop processes.
 2. Multiply by 6 x the parameter count to get the FLOPs per second actually achieved (about 8 x if gradient checkpointing is used).
 3. Divide by the benchmark TFLOPS (measured in the same precision).
-4. Run for long enough that thermal throttling shows up, then put the result into `sizer_core/src/main.rs`.(completed)
+4. Run for long enough that thermal throttling shows up, then put the result into `sizer_core/src/main.rs`.
 
 ## Setup
 
@@ -135,7 +143,7 @@ Rebuild with `--release` after any change to the Rust code, because `architectur
 The `dataset/` folder is not part of the repository (it is listed in `.gitignore`), because it holds large text files and unchecked copyright data. It looks like this:
 
 ```
-dataset/             
+dataset/
   arxiv_texts/       created by download_arxiv_text.py
   english_dataset/   created by download_english_data.py
 ```
@@ -150,7 +158,7 @@ python download_arxiv_text.py     # downloads and cleans arXiv papers as text (n
 python architecture.py            # hardware detection, benchmark, token count and sizing
 ```
 
-The tokenizer is still a work in progress and is run on its own from inside its folder (it reads `../dataset/arxiv_texts` and writes `merges.bin` into the current folder):
+The tokenizer is still a work in progress and is run on its own from inside its folder (it reads `../dataset/arxiv_texts`, trains, writes `merges.bin` into the current folder, then reads it back and rebuilds the vocabulary):
 
 ```bash
 cd tokenizer_core
@@ -162,7 +170,7 @@ cargo run --release
 - Python 3.x
 - Rust toolchain (for `sizer_core` and `tokenizer_core`)
 - For GPU detection: NVIDIA drivers (`nvidia-smi`) or ROCm tooling (`amd-smi` / `rocm-smi` / `rocminfo`), depending on hardware. CPU-only systems fall back automatically.
-- For the intended training setup: a GPU with bf16 support (NVIDIA Ampere or newer, such as the RTX 4050).
+- For the intended training setup: a GPU with native bf16 support (NVIDIA Ampere or newer, such as the RTX 3050).
 - Internet access for the download scripts
 
 ## Contributing

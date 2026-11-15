@@ -17,6 +17,7 @@ One entry per decision or dropped idea, with the reason. Code history lives in g
 - **Replaced HashMap with IndexMap.** I chose `indexmap` over `HashMap` and accepted the extra dependency.
   - A `HashMap` cannot look up items by numeric position without a slow manual search; `IndexMap` can do it quickly.
   - `HashMap` iterates in a scrambled, random order (a defence against HashDoS attacks). I do not need that defence, and the random order is a real drawback for BPE: when two pairs have the same count, the winner would change from run to run. With `IndexMap` the order is the insertion order, so two runs on the same data give the same merges.
+  - Update 2026-11-15: the tie rule is now explicit (see below), so determinism no longer depends on the map's order. `IndexMap` is kept for now; revisit whether the dependency is still worth it.
 
 ## 2026-11-09
 
@@ -39,7 +40,6 @@ One entry per decision or dropped idea, with the reason. Code history lives in g
   - Special tokens take the fixed IDs just above the raw bytes (256, 257), before any learned merge, so their IDs never change when the number of merges changes.
 - **Math text: strip LaTeX font commands and whitespace inside `$...$`.** `\mathrm`, `\mathbf`, `\it`, `\bf` and similar only change how a formula looks, not what it means, and each variant gives the tokenizer a different spelling of the same thing. Spaces inside math are removed for the same reason. To check on many papers: that nothing meaningful is lost (the `\beta` entry in the regex looks wrong and must be reviewed).
 
-
 ## 2026-11-13
 
 - **Explicit BPE tie-breaking rule: smallest `(left, right)` token ID pair wins.** Replaced implicit `max_by_key` insertion-order tie resolution with an explicit `max_by` comparison: compare frequency first, and on a tie pick the lexicographically smallest `(left, right)` token ID tuple (`b.0.cmp(a.0)`).
@@ -50,3 +50,20 @@ One entry per decision or dropped idea, with the reason. Code history lives in g
   - **12-second thermal soak + median reporting:** Replaced the 10-iteration warmup with a 12-second continuous matmul loop so laptop GPUs settle past short-term boost clocks into sustained TDP, and switched from mean to median TFLOPS to ignore background OS spikes.
   - **Native BF16 only (`including_emulation=False`):** Checks `torch.cuda.is_bf16_supported(including_emulation=False)` on PyTorch 2.4+ (falling back to compute capability `>= 8.0` on older versions) so pre-Ampere GPUs use native FP32 instead of slow software-emulated BF16.
   - **Vendor-to-PyTorch GPU index verification:** Sets `CUDA_DEVICE_ORDER=PCI_BUS_ID` before importing PyTorch and matches the vendor tool's reported GPU name against `torch.cuda.get_device_name()` (`resolve_pytorch_index`) so iGPU + dGPU or multi-GPU machines benchmark the selected card.
+
+## 2026-11-15
+
+- **Each distinct chunk is stored once, with a count.** The text is split into chunks, and the same chunk (for example the word "the" or a single space) repeats thousands of times. A `HashMap<Vec<u16>, usize>` counts every distinct chunk while reading, then it is turned into a `Vec<(chunk, count)>` that the merge loop can edit.
+  - Reason: merging a word once and multiplying by its count gives exactly the same pair counts as merging every copy, with far less work and memory.
+  - The order of the `Vec` is arbitrary (it comes out of a `HashMap`). That is fine because pair counts are sums and the tie rule is explicit, so the learned merges do not depend on the order.
+- **Pair counts are computed once and updated incrementally, not recounted every iteration.** The old loop recounted every pair in every chunk for each merge, which cost (corpus size x number of merges). Now, after each merge:
+  - the winning pair's entry is removed from the counts;
+  - only the chunks that contain the winning pair are touched: their old pairs are subtracted (times the chunk count), the chunk is rewritten, and its new pairs are added (times the chunk count).
+  - Risk to check: a mistake in this bookkeeping would silently give wrong counts and therefore different merges. Test before trusting it: on a small corpus, compare the merges against the old full-recount version, and compare the counts against a full recount every few merges.
+  - Side effect: `swap_remove` reorders the `IndexMap`, which is harmless now that the tie rule is explicit.
+- **Vocabulary size set to 16,384 tokens (`NET_MERGES` = 16,126).** 256 bytes + 2 special tokens + 16,126 merges = 16,384 (2^14).
+  - Chosen deliberately as a power of two (2^14).
+  - Reason: This is primarily done by me for gpu hardware optimization and memory alignment which speeds up both training and infrence. also when embeeding table and output projection matrices align clearly no extra vram is wasted which is very valuable to us also modern gpus handle them better.
+  - Still open: whether this is final; to be compared in small experiments once the training loop exists.
+- **PDF input removed.** `data_extractor.py` no longer reads PDFs; `pymupdf` and `dataset/pdfs/` are gone from the setup.
+  - Reason: arXiv text now comes from the ar5iv HTML download (see 2026-10-25), which keeps math as LaTeX and identifies citations, tables and authors by class, so the PDF path was no longer needed. *(Correct this if there was another reason.)*
