@@ -1,9 +1,37 @@
-use std::{collections::HashMap, fs::{self, File}, io::{BufWriter,Write}};
-use regex::Regex;
+use std::{collections::HashMap, fs::{self, File}, io::{BufWriter,Write},path::Path};
+use regex::{Regex};
 use indexmap::IndexMap;
 
 const NET_MERGES:u16=16126;
 //NET_MERGES can never exceed 65,278 because u16 limits us to 65,536 total IDs.
+
+
+fn main(){
+    if !Path::new("merges.bin").exists(){
+        println!("STARTING BPE....\n\n");
+        let file_contents=read_files();
+        bpe(&file_contents);
+    }else{
+        println!("FOUND EXISTING merges.bin. SKIPPING BPE TRAINING.\n");
+    }
+
+
+    let merges=loader("merges.bin");
+    println!("LOADED {} MERGE RULES.",merges.len());
+
+    let vocab=build_vocab(&merges);
+
+    println!("STARTING SAMPLE TESTS\n");
+    let sample="Neural networks learn via backpropagation [cite]<|endoftext|>";
+    let ids=encode(sample,&merges);
+    println!("SAMPLE: {:?}",sample);
+    println!("TOKEN IDS({} tokens):{:?}",ids.len(),ids);
+
+    let decoded=decode(&ids,&vocab).unwrap();
+    println!("DECODED: {:?}",decoded);
+    assert_eq!(sample, decoded);
+}
+
 
 fn read_files()->String{
     let folder_location="../dataset/arxiv_texts";
@@ -68,7 +96,9 @@ fn adjust_pairs(pair_count:&mut IndexMap<(u16,u16),usize>,pair:(u16,u16),delta:i
     }
 }
 
-fn bpe(text: &str){
+fn split_text<'a>(text: &'a str)->Vec<&'a str>{
+    // 'a is a rust lifetime label which gurantess that the string slices &str can never outlive orignal text.
+    //This approach prevents rust from dangling pointers without sacrificing any runtime cost.
     let special_regex = Regex::new(r"<\|endoftext\|>|\[cite\]").unwrap();
     let clean_text_way = Regex::new(r"<\|endoftext\|>|\[cite\]|\$| ?\p{L}+| ?\p{N}+|[^\s\p{L}\p{N}$]+|\s+").unwrap();
     //These 2 specific line is the heart of the entire code. it tells the computer whr to chop the string into smaller units.
@@ -96,6 +126,34 @@ fn bpe(text: &str){
             clean_text.push(sub_mat.as_str());
         }
     }
+    clean_text    
+}
+
+fn apply_merge(token:&[u16],target_pair:(u16, u16),new_id:u16)->Vec<u16>{
+    let mut i =0;
+    //An index pointer "i" is initialized at 0. It is responsible for tracking current token position as the code moves through the chunks.
+
+    let mut merged_chunk=Vec::with_capacity(token.len());
+    //This is the scratchpad vector for merging.
+    //This is also making our bpe run significantly faster as normally rust has to frequently pause and reallocate a larger memory block.
+    //But when we pre allocate the exact capacity required the vector writes its data instantly without waiting.            
+    while i<token.len(){
+            if i+1 < token.len() && token[i] == target_pair.0 && token[i+1]==target_pair.1{
+                //This part acts as a conditional safety check checking if a neighbouring token even exists--i+1 < token.len()
+                //And the second part checks if the current token and its neighbour perfectly match the winning pair--token[i] == best_pair.0 && token[i+1]==best_pair.1                        
+                merged_chunk.push(new_id);
+                i+=2;
+                // i is incremented by 2 as 2 characters have been processed.
+            }else {
+                merged_chunk.push(token[i]);
+                i+=1;
+            }
+        }   
+    merged_chunk 
+} 
+
+fn bpe(text: &str){
+    let clean_text=split_text(text);
 
     let mut chunk_counts:HashMap<Vec<u16>,usize>=HashMap::new();
     //This line creates tokenized_chunks which is basically a list inside another list, in simple terms a vector inside of vector.
@@ -184,26 +242,9 @@ fn bpe(text: &str){
                         adjust_pairs(&mut pair_counts,p,-(*freq as isize));
                     }
                 }
-                let mut i =0;
-                //An index pointer "i" is initialized at 0. It is responsible for tracking current token position as the code moves through the chunks.
 
-                let mut merged_chunk=Vec::with_capacity(chunk.len());
-                //This is the scratchpad vector for merging.
-                //This is also making our bpe run significantly faster as normally rust has to frequently pause and reallocate a larger memory block.
-                //But when we pre allocate the exact capacity required the vector writes its data instantly without waiting.
+                let merged_chunk=apply_merge(chunk, best_pair,next_token_id);
 
-                while i<chunk.len(){
-                    if i+1 < chunk.len() && chunk[i] == best_pair.0 && chunk[i+1]==best_pair.1{
-                        //This part acts as a conditional safety check checking if a neighbouring token even exists--i+1 < chunk.len()
-                        //And the second part checks if the current token and its neighbour perfectly match the winning pair--chunk[i] == best_pair.0 && chunk[i+1]==best_pair.1                        
-                        merged_chunk.push(next_token_id);
-                        i+=2;
-                        // i is incremented by 2 as 2 characters have been processed.
-                    }else {
-                        merged_chunk.push(chunk[i]);
-                        i+=1;
-                    }
-                }
                 for pair in merged_chunk.windows(2){
                     adjust_pairs(&mut pair_counts,(pair[0],pair[1]),*freq as isize);
                 }
@@ -264,12 +305,55 @@ fn build_vocab(merges:&[((u16,u16),u16)])->HashMap<u16,Vec<u8>>{
     vocab
 }
 
-fn main(){
-    let file_contents=read_files();
-    bpe(&file_contents);
+fn encode(text: &str,merges:&[((u16,u16),u16)])->Vec<u16>{
+    let clean_text=split_text(text);
+    let merges_for_encoding:HashMap<(u16,u16),u16>=merges.iter().copied().collect();
 
-    let merges=loader("merges.bin");
-    println!("LOADED {} MERGE RULES.",merges.len());
+    let mut encoded_chunks:Vec<u16>=Vec::new();
+    for chunk in &clean_text{
+        if *chunk=="[cite]"{
+            encoded_chunks.push(256);
+            continue;
+        }
+        if *chunk=="<|endoftext|>"{
+            encoded_chunks.push(257);
+            continue;
+        }
 
-    let _vocab=build_vocab(&merges);
+        let mut byte_tokens:Vec<u16>=chunk.as_bytes().iter().map(|&b| b as u16).collect();
+        while byte_tokens.len()>=2{
+            let mut best_merge:Option<((u16,u16),u16)>=None;
+            for pair in byte_tokens.windows(2){
+                let p=(pair[0],pair[1]);
+                if let Some(&merged_id)=merges_for_encoding.get(&p){
+                    if best_merge.map_or(true,|(_, best_id)|merged_id<best_id){
+                        //best_merge is an option which originally starts as None and after the loop holds our best pair.
+                        //This line handles the cases if best merge is none than it returns true.
+                        //If best merge pair is something else it ignores the pair and runs merged_id<best_id and returns true only if the new pair has a smaller merged_id.
+                        //Signifying it was learned during training.
+                        best_merge=Some((p, merged_id));
+                    }
+                } 
+            }
+            let Some(((left_id,right_id),merged_id))=best_merge else{
+                break;
+            };
+            byte_tokens=apply_merge(&byte_tokens, (left_id,right_id),merged_id);
+        }
+        encoded_chunks.extend(byte_tokens);
+    }
+    encoded_chunks
+}
+
+fn decode(ids:&[u16],vocab:&HashMap<u16,Vec<u8>>)->Result<String,String>{
+    let mut bytes:Vec<u8>=Vec::with_capacity(ids.len()*4);
+    //This line estimates that each BPE token expands to roughly 4 bytes (4 characters) of text on average.Even if off by little rust can expand the vector sometimes rather than everytime.
+
+    for &id in ids{
+        let token_bytes=vocab
+            .get(&id)
+            .ok_or_else(|| format!("UNKNOWN TOKEN ID IN DECODE {}",id))?;
+        bytes.extend_from_slice(token_bytes);
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
