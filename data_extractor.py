@@ -1,4 +1,3 @@
-import pymupdf
 import unicodedata
 from pathlib import Path
 

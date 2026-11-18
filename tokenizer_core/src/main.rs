@@ -1,9 +1,9 @@
-use std::{collections::HashMap, fs::{self, File}, io::{BufWriter,Write}, usize};
+use std::{collections::HashMap, fs::{self, File}, io::{BufWriter,Write}};
 use regex::Regex;
 use indexmap::IndexMap;
 
 const NET_MERGES:u16=16126;
-//NET_MERGES can never exceed 65,276 because u16 limits us to 65,535.
+//NET_MERGES can never exceed 65,278 because u16 limits us to 65,536 total IDs.
 
 fn read_files()->String{
     let folder_location="../dataset/arxiv_texts";
@@ -27,7 +27,7 @@ fn read_files()->String{
     all_contents
 }
 //all_contents is a string with all the contents of the arxiv_texts(currently) to avoid them from being clumped up together
-//i also push 3 new lines after each line.
+//i also push <|endoftext|> token and 3 new lines after each document.
 
 
 fn count_pairs(tokenized_chunks:&[(Vec<u16>,usize)])->IndexMap<(u16,u16),usize>{
@@ -45,14 +45,17 @@ fn count_pairs(tokenized_chunks:&[(Vec<u16>,usize)])->IndexMap<(u16,u16),usize>{
         for pair in chunk.windows(2){
             let p=(pair[0],pair[1]);
             *pair_counts.entry(p).or_insert(0)+=*freq;
-    //This counts how many times every adjacent pair of tokens appear across text chunks.
-    //here p is a tuple which stores the same. if it alrdy exists we dont count it. initializes to 0--if pair is new,and then increases count to 1.
+            //p is a tuple representing a specific pair of adjacent token IDs.
+            //The other half of the expression acts as an automated tally sheet: it checks the map to see if pair p is already recorded, automatically writes it down with a starting score of 0 if it's brand new, and then immediately adds the chunk's frequency (*freq) to its running total.
         }
     }
     pair_counts
 }
 
 fn adjust_pairs(pair_count:&mut IndexMap<(u16,u16),usize>,pair:(u16,u16),delta:isize){
+    //This part of the code safely updates pair counts.
+    //When frequency of a token hits zero, completely removes the pair from the map to optimize memory and lookups.
+    //This signifacantly fastens our bpe.
     if delta>0{
         *pair_count.entry(pair).or_insert(0)+=delta as usize;
     }else if delta<0{
@@ -66,16 +69,32 @@ fn adjust_pairs(pair_count:&mut IndexMap<(u16,u16),usize>,pair:(u16,u16),delta:i
 }
 
 fn bpe(text: &str){
-    let clean_text_way=Regex::new(r"<\|endoftext\|>|\[cite\]|\$|\w+|\s+|[^\w\s]").unwrap();
-    //This specific line is the heart of the entire code. it tells the computer whr to chop the string into smaller units.
+    let special_regex = Regex::new(r"<\|endoftext\|>|\[cite\]").unwrap();
+    let clean_text_way = Regex::new(r"<\|endoftext\|>|\[cite\]|\$| ?\p{L}+| ?\p{N}+|[^\s\p{L}\p{N}$]+|\s+").unwrap();
+    //These 2 specific line is the heart of the entire code. it tells the computer whr to chop the string into smaller units.
     //Because we needs to preserve $ and [cite] and hence they are given the priority and the code splits them first.
-    let mut clean_text:Vec<&str>=Vec::new();
+    //It is important to note that i did consider fancy-regex over normal regex as used in tiktoken to account for backtracking of tokens but considering the effeciency trade-off i went with standard regex.
+    //As with standard regex we unlock Rust's Deterministic Finite Automaton (DFA) regex engine which processes text in strict, guaranteed O(n) linear time using SIMD making it significantly faster than fancy-regex. 
 
-    for mat in clean_text_way.find_iter(text){
-        //this purticular line applies the regex rule over the accumulated text.
+    let mut clean_text: Vec<&str>=Vec::new();
+    let mut last_idx=0;
+
+    for mat in special_regex.find_iter(text) {
+        let text_segment=&text[last_idx..mat.start()];
+        if !text_segment.is_empty(){
+            for sub_mat in clean_text_way.find_iter(text_segment){
+                clean_text.push(sub_mat.as_str());
+            }
+        }
         clean_text.push(mat.as_str());
-        //the function .as_str() when applied to mat creates a fat pointer.
-        //A FAT pointer is of 16 bytes it basically combines a standard memory address with additional metadata.
+        last_idx = mat.end();
+    }
+
+    let remaining_segment=&text[last_idx..];
+    if !remaining_segment.is_empty(){
+        for sub_mat in clean_text_way.find_iter(remaining_segment){
+            clean_text.push(sub_mat.as_str());
+        }
     }
 
     let mut chunk_counts:HashMap<Vec<u16>,usize>=HashMap::new();
@@ -102,6 +121,10 @@ fn bpe(text: &str){
     }
 
     let mut tokenized_chunks:Vec<(Vec<u16>,usize)>=chunk_counts.into_iter().collect();
+    //To avoid processing duplicate text blocks repeatedly, 
+    //I first groups identical token sequences into a HashMap alongside their occurrence frequencies.
+    //I then converts that hash map into a vector of tuples (Vec<u16>, usize). 
+    //This vector represents the entire text corpus broken down into unique, weighted token sequences.
 
     let mut next_token_id:u16=258;
     //We chose 258 for new merged tokens as avoids overlapping with any pre existing characters or special tokens.
@@ -114,12 +137,14 @@ fn bpe(text: &str){
         .expect("ERROR IN CREATING BINARY FILE.");
 
     let mut writer=BufWriter::new(file);
+    //Instead of interacting directly with a hard drive or SSD for every single write operation BufWriter collects the bytes safely in a fast RAM memory buffer and only flushes them to the disk in large, optimized chunks at the very end.
+    //This also makes our bpe incrementally faster.
 
     let mut pair_counts=count_pairs(&tokenized_chunks);
     for iteration in 0.. NET_MERGES{
         
-        let best_option_pair=pair_counts.iter().max_by(|a,b|{
-            //The .iter.max_by_key() part loops through the entire database and ignores the token themselves and looks only at the count.
+        let best_option_pair: Option<(&(u16, u16), &usize)>=pair_counts.iter().max_by(|a,b|{
+            // The .iter().max_by() part loops through the pair counts, comparing frequencies first, and uses secondary tie-breaking logic if frequencies match.
             //And finds the when in which the count is the highest
 
             let freq=a.1.cmp(b.1);
@@ -163,7 +188,9 @@ fn bpe(text: &str){
                 //An index pointer "i" is initialized at 0. It is responsible for tracking current token position as the code moves through the chunks.
 
                 let mut merged_chunk=Vec::with_capacity(chunk.len());
-                //This is the vector in which newly compressed version of the chunk is going to be built.
+                //This is the scratchpad vector for merging.
+                //This is also making our bpe run significantly faster as normally rust has to frequently pause and reallocate a larger memory block.
+                //But when we pre allocate the exact capacity required the vector writes its data instantly without waiting.
 
                 while i<chunk.len(){
                     if i+1 < chunk.len() && chunk[i] == best_pair.0 && chunk[i+1]==best_pair.1{
@@ -201,6 +228,7 @@ fn loader(file_path:&str)->Vec<((u16,u16),u16)> {
     let net_bytes=fs::read(file_path)
         .expect("FAILED TO READ BINARY FILE.");
     let mut merges=Vec::new();
+    //This vector represents the entire history of all the iterations.
 
     for chunk in net_bytes.chunks_exact(6){
         let left=u16::from_le_bytes(chunk[0..2].try_into().unwrap());
@@ -221,6 +249,7 @@ fn build_vocab(merges:&[((u16,u16),u16)])->HashMap<u16,Vec<u8>>{
     let mut vocab:HashMap<u16,Vec<u8>>=HashMap::new();
     for i in 0..=255u16 {
         vocab.insert(i,vec![i as u8]);
+        //To map token IDs back to human readable bytes, the vocab stores a Vec<u8> for every single token id.
     }
     vocab.insert(256,b"[cite]".to_vec());
     vocab.insert(257,b"<|endoftext|>".to_vec());
@@ -228,6 +257,8 @@ fn build_vocab(merges:&[((u16,u16),u16)])->HashMap<u16,Vec<u8>>{
     for &((left,right),merged_id) in merges{
         let mut combined=vocab[&left].clone();
         combined.extend_from_slice(&vocab[&right]);
+        // combined.extend_from_slice() is doing recursive reconstruction of text from merge history.
+        //The loop is able to build vocab by gluing its left and right component byte vectors together.
         vocab.insert(merged_id,combined);
     }
     vocab

@@ -186,4 +186,6 @@ For other bugs, documentation fixes, or dataset cleaning improvements, feel free
 
 ## License
 
-TBD
+Copyright 2026 ojasgarg77
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at [http://apache.org](http://apache.org) or in the [LICENSE](LICENSE) file in this repository.
