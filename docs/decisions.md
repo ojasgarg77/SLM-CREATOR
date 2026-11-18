@@ -63,7 +63,27 @@ One entry per decision or dropped idea, with the reason. Code history lives in g
   - Side effect: `swap_remove` reorders the `IndexMap`, which is harmless now that the tie rule is explicit.
 - **Vocabulary size set to 16,384 tokens (`NET_MERGES` = 16,126).** 256 bytes + 2 special tokens + 16,126 merges = 16,384 (2^14).
   - Chosen deliberately as a power of two (2^14).
-  - Reason: This is primarily done by me for gpu hardware optimization and memory alignment which speeds up both training and infrence. also when embeeding table and output projection matrices align clearly no extra vram is wasted which is very valuable to us also modern gpus handle them better.
+  - Reason: this is primarily for GPU hardware optimization and memory alignment, which speeds up both training and inference. When the embedding table and the output projection matrix have aligned sizes, no extra VRAM is wasted, which is valuable here, and modern GPUs handle such sizes better.
+  - Caveat (added 2026-11-19): the real requirement for tensor-core efficiency is usually that dimensions are multiples of 8 (or 64 for the best kernels), not that they are powers of two. 16,384 satisfies this, but so would other sizes, for example 16,000 + specials rounded to a multiple of 64. I should not claim that a power of two is required, and I have not measured any speed difference yet.
   - Still open: whether this is final; to be compared in small experiments once the training loop exists.
 - **PDF input removed.** `data_extractor.py` no longer reads PDFs; `pymupdf` and `dataset/pdfs/` are gone from the setup.
-  - Reason: arXiv text now comes from the ar5iv HTML download (see 2026-10-25), which keeps math as LaTeX and identifies citations, tables and authors by class, so the PDF path was no longer needed. *(Correct this if there was another reason.)*
+  - Reason: arXiv text now comes from the ar5iv HTML download (see 2026-10-25), which keeps math as LaTeX and identifies citations, tables and authors by class, so the PDF path was no longer needed.
+
+## 2026-11-19
+
+- **Encoding replays merges in the order they were learned: lowest merged ID first.** For each chunk, `encode` looks at all adjacent pairs, picks the one whose merge has the smallest new token ID (learned earliest), applies it everywhere in the chunk, and repeats until no learned pair is left.
+  - Reason: during training the most frequent pair was merged first, then the next, so the tokens of any word were formed in ID order. Replaying in the same order reproduces the segmentation training would have produced. Applying merges in any other order (for example left to right) could give a different, worse split of the same word.
+  - The same `split_text` function is used by training and by `encode`, so both cut the text into identical chunks. Merges never cross a chunk boundary in either.
+  - `[cite]` and `<|endoftext|>` skip the merge step and map straight to 256 and 257.
+  - Text never seen in training still encodes: whatever cannot be merged stays as raw bytes (IDs 0-255). This is the main reason for working on bytes instead of characters; there is no unknown token.
+  - Known costs, accepted for now:
+    - The lookup table `merges_for_encoding` is rebuilt on every `encode` call. Fine for a sample sentence, wasteful for a corpus.To be fixed.
+    - Each round scans every pair in the chunk and rewrites the chunk, so the cost per chunk grows quickly with its length. Chunks are single words or whitespace runs, so they are short, but a very long unbroken string would be slow.
+    - Not yet verified that encoding text from the training data reproduces exactly the training segmentation (test listed in README).
+- **Decoding concatenates the bytes of each token and converts to a string with `from_utf8_lossy`; an unknown ID returns an error.**
+  - Reason: every token is a byte sequence, so decoding is just a lookup and a join. An unknown ID means a bug or a corrupt stream, so it is reported instead of skipped silently.
+  - Caveat: `from_utf8_lossy` replaces invalid UTF-8 with a replacement character instead of failing. For a full encode-decode round trip this never happens, but a token boundary can fall in the middle of a multi-byte character, so decoding a partial sequence (for example text generated one token at a time) can show replacement characters temporarily.
+- **A round-trip check runs at the start of the tokenizer's `main()`:** one sample sentence containing `[cite]` and `<|endoftext|>` is encoded, decoded, and compared with the original using `assert_eq!`.
+  - Reason: cheapest possible guard against a broken `build_vocab`, `encode` or `decode`. It also proves that special tokens survive.
+  - Honest limit: it is one sentence, so it does not count as a test suite. Real tests (many inputs, multi-byte characters, empty strings, unseen text, segmentation equal to training) are still on the list in the README.
+- **Next use of the tokenizer: measure real characters per token.** The sizing step still assumes 4 characters per token in `data_extractor.py`. With `encode` available, the number can be measured on samples of arXiv text and of the English text and replace the guess, because the data limit in `sizer_core` depends directly on it.

@@ -52,7 +52,7 @@ I do not own a GPU for my primary development environment. The NVIDIA GPU code p
     - Replacing in-text citations with a `[cite]` placeholder.
     - Filtering out author info, affiliations, bibliographies, footnotes, figures, and irrelevant tables.
     - Skipping existing files and handling/deleting corrupt or empty files.
-  - `data_extractor.py`: scans the text files in `dataset/arxiv_texts/` and `dataset/english_dataset/`. It cleans typographic ligatures (such as "ﬀ" to "ff", "ﬁ" to "fi", etc.) using `LIGATURE_AND_UNICODE_DICTIONARY`, counts characters across lines for all sources, and estimates total tokens (`main()`) at 4 characters per token to pass back to `architecture.py`. The 4 characters per token figure is a rough guess until the real tokenizer exists. PDF input was removed; all arXiv text now comes from the ar5iv HTML download.
+  - `data_extractor.py`: scans the text files in `dataset/arxiv_texts/` and `dataset/english_dataset/`. It cleans typographic ligatures (such as "ﬀ" to "ff", "ﬁ" to "fi", etc.) using `LIGATURE_AND_UNICODE_DICTIONARY`, counts characters across lines for all sources, and estimates total tokens (`main()`) at 4 characters per token to pass back to `architecture.py`. The 4 characters per token figure is a rough guess. Now that the tokenizer can encode text, it can be replaced by a measured figure (see "To do (data)" below). PDF input was removed; all arXiv text now comes from the ar5iv HTML download.
     - The `\beta` entry in the `\mathrm|\mathit|...` math regex looks like a leftover; check that it does not eat real `\beta` symbols.
   - To do (arXiv):
     - Check why some papers (for example Adam, 1412.6980) appear to convert only partially, and add a check for partial pages.
@@ -60,22 +60,27 @@ I do not own a GPU for my primary development environment. The NVIDIA GPU code p
     - Decide what mentions like "Eq. 2" should become now that equation labels are dropped (for example a placeholder token, like `[cite]`).
     - Confirm the LaTeX style stripping with frequency counts over many papers.
   - To do (cleaning, English data): normalize the spacing around punctuation in the English data, drop ebook boilerplate and URL lines, and share one cleaning function (and one Unicode dictionary) between all sources (the extractor still uses the short dictionary, the arXiv script the full one).
-  - To do (data): collect much more on-topic neural-network text, because on-topic text is only a small share of the current mix and, once the benchmark is fixed, the data limit is likely to be the binding one. Cleaned arXiv papers are much shorter than raw PDFs, so the number of papers needed is likely higher than first estimated; measure tokens per usable paper on a sample.
+  - To do (data): collect much more on-topic neural-network text, because on-topic text is only a small share of the current mix and, once the benchmark is fixed, the data limit is likely to be the binding one. Cleaned arXiv papers are much shorter than raw PDFs, so the number of papers needed is likely higher than first estimated; measure tokens per usable paper on a sample. Also replace the 4-characters-per-token guess with a measured number: encode a sample with the real tokenizer and divide characters by tokens (the figure will differ between arXiv text and English fiction).
 
 - 🔧 **Tokenizer** (`tokenizer_core`, Rust, work in progress): a byte-level BPE tokenizer trained from scratch. `[cite]` and `$` must each stay a single chunk, and whitespace must be preserved exactly.
   - **Token IDs** (`u16`, so up to 65,535): 0-255 are the raw bytes, 256 is `[cite]`, 257 is `<|endoftext|>`, and 258 onward are merged tokens numbered in the order they are learned.
   - **Done so far:**
     - Reads every `.txt` file in `dataset/arxiv_texts/` and joins them, with an `<|endoftext|>` marker and blank lines after each paper, so documents are never run together.
-    - Splits the text into chunks with a regex (`regex` crate): `<|endoftext|>`, the `[cite]` placeholder, `$`, words, whitespace runs, and single punctuation characters. `[cite]` becomes the single ID 256, `<|endoftext|>` the single ID 257; every other chunk becomes its UTF-8 bytes widened to `u16`. Merges never cross a chunk boundary.
+    - Splits the text into chunks with a regex (`regex` crate): `<|endoftext|>`, the `[cite]` placeholder, `$`, words, whitespace runs, and single punctuation characters. `[cite]` becomes the single ID 256, `<|endoftext|>` the single ID 257; every other chunk becomes its UTF-8 bytes widened to `u16`. Merges never cross a chunk boundary. The same splitting function is used for training and for encoding, so both see identical chunks.
     - **Stores each distinct chunk once, with a count.** A word like "the" appears thousands of times, but it is only merged once and its pairs are counted once, multiplied by how often the chunk occurs.
     - **Counts pairs once, then updates incrementally.** All adjacent pairs are counted (weighted by chunk count) before the first merge. After each merge, only the chunks that contain the winning pair are touched: their old pairs are subtracted from the counts and the pairs of the rewritten chunk are added. The winning pair's own entry is removed.
     - Runs the merge loop: pick the most frequent pair, give it the next free ID, and rewrite the affected chunks left to right without overlapping matches.
     - **Breaks frequency ties with an explicit rule:** the pair with the smallest `(left, right)` token IDs wins (see `docs/decisions.md`). The result no longer depends on the order the chunks or pairs happen to be visited in.
     - **Number of merges:** `NET_MERGES` is currently 16,126, which gives a vocabulary of 16,384 tokens (256 bytes + 2 special tokens + 16,126 merges). It can never exceed what `u16` allows. Progress is printed every 500 iterations.
-    - **Saves the learned merges to `tokenizer_core/merges.bin`.** Each merge is one fixed 6-byte record: left token, right token, new token ID, each a little-endian `u16`, in the order the merges were learned. That order matters, because encoding must replay the merges in the same order. The file is written through a buffer and flushed once at the end, and is listed in `.gitignore`.
+    - **Saves the learned merges to `tokenizer_core/merges.bin`.** Each merge is one fixed 6-byte record: left token, right token, new token ID, each a little-endian `u16`, in the order the merges were learned. That order matters, because encoding must replay the merges in the same order. The file is written through a buffer and flushed once at the end, and is listed in `.gitignore`. If `merges.bin` already exists, training is skipped and the file is loaded.
     - Reads `merges.bin` back with `loader()` and rebuilds the full ID-to-bytes vocabulary in memory (`build_vocab()`): 0-255 raw bytes, 256, 257, and every merged token as the bytes of its left part followed by its right part.
+    - **Encodes text to IDs** (`encode()`): the text is split into chunks the same way as in training. `[cite]` and `<|endoftext|>` map straight to 256 and 257. Every other chunk starts as its bytes, then merges are applied repeatedly: of all adjacent pairs that have a learned merge, the one with the smallest merged ID (the one learned earliest) is applied everywhere in the chunk, and this repeats until no learned pair is left. Text never seen in training still encodes, because it falls back to raw bytes.
+    - **Decodes IDs back to text** (`decode()`): looks up each ID in the vocabulary, joins the bytes, and converts them to a string. An unknown ID returns an error instead of panicking.
+    - **Round-trip smoke test in `main()`:** encodes one sample sentence (containing `[cite]` and `<|endoftext|>`), prints the IDs, decodes them and asserts that the result equals the original. This is a single sentence, not a real test suite (see tests below).
   - **Not done yet:**
-    - No encode and no decode: the vocabulary is built but not used yet.
+    - Nothing encodes the whole dataset into a stored token stream yet; that belongs to the ingestion stage.
+    - `encode()` rebuilds its merge lookup table on every call. This is fine for one sample sentence but must be built once and passed in before encoding a whole corpus.
+    - `decode()` converts bytes to text leniently (invalid UTF-8 becomes a replacement character instead of an error). This is harmless for a complete sequence, but a cut-off sequence can end in the middle of a multi-byte character.
     - The incremental pair counts have not been checked against a full recount (see tests below).
     - The input path is relative (`../dataset/arxiv_texts`) and the output goes to the current folder, so for now the program must be run from inside `tokenizer_core`.
   - **Open decisions:** whether 16,384 is the final vocabulary size (it sets the embedding table size, and with it a share of the parameter budget); whether the tokenizer should also train on the English text; whether the metadata lines (`title--`, `arxiv id--`, ...) stay in the training text; and whether a space should attach to the following word (currently spaces are separate chunks).
@@ -84,7 +89,8 @@ I do not own a GPU for my primary development environment. The NVIDIA GPU code p
     - Joining the chunks must reproduce the original text exactly.
     - The number of `[cite]` occurrences in the text must equal the number of ID 256 in the encoded output (and likewise `<|endoftext|>` and 257).
     - `merges.bin` size must be a multiple of 6 and equal 6 x the number of merges. `loader()` currently ignores a partial record at the end of the file without any error, so a damaged file would load silently.
-    - Decoding after encoding must give back the original text.
+    - Round trip on many inputs, not one sentence: decoding after encoding must give back the original text, including multi-byte characters, empty strings, runs of spaces, and text that never occurred in training.
+    - Encoding text that was in the training data must give the same segmentation that training produced (the replay order really matches the learned order).
 
 - ⏳ Dataset specialization matching: not started.
 - ⏳ Rust ingestion pipeline (batching and streaming; tokenizing builds on `tokenizer_core`): not started.
@@ -158,7 +164,7 @@ python download_arxiv_text.py     # downloads and cleans arXiv papers as text (n
 python architecture.py            # hardware detection, benchmark, token count and sizing
 ```
 
-The tokenizer is still a work in progress and is run on its own from inside its folder (it reads `../dataset/arxiv_texts`, trains, writes `merges.bin` into the current folder, then reads it back and rebuilds the vocabulary):
+The tokenizer is still not connected and is run on its own from inside its folder. It reads `../dataset/arxiv_texts` and trains, unless `merges.bin` already exists, in which case it skips training and loads the file. It then rebuilds the vocabulary and runs the round-trip sample test (encode, decode, compare). To retrain, delete `merges.bin` first:
 
 ```bash
 cd tokenizer_core
