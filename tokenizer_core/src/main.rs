@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs::{self, File}, io::{BufWriter,Write},path::Path};
+use std::{collections::HashMap, fs::{self, File}, io::{BufWriter,Write}, path::Path, sync::OnceLock};
 use regex::{Regex};
 use indexmap::IndexMap;
 
@@ -15,19 +15,19 @@ fn main(){
         println!("FOUND EXISTING merges.bin. SKIPPING BPE TRAINING.\n");
     }
 
+    let merges = loader("merges.bin");
+    println!("LOADED {} MERGE RULES.", merges.len());
 
-    let merges=loader("merges.bin");
-    println!("LOADED {} MERGE RULES.",merges.len());
+    let tokenizer = Tokenizer::new(&merges);
 
-    let vocab=build_vocab(&merges);
 
     println!("STARTING SAMPLE TESTS\n");
-    let sample="Neural networks learn via backpropagation [cite]<|endoftext|>";
-    let ids=encode(sample,&merges);
+    let sample="Neural networks learned through [cite] backpropagation [cite] <|endoftext|>";
+    let ids=tokenizer.encode(sample);
     println!("SAMPLE: {:?}",sample);
     println!("TOKEN IDS({} tokens):{:?}",ids.len(),ids);
 
-    let decoded=decode(&ids,&vocab).unwrap();
+    let decoded=tokenizer.decode(&ids).unwrap();
     println!("DECODED: {:?}",decoded);
     assert_eq!(sample, decoded);
 }
@@ -40,17 +40,15 @@ fn read_files()->String{
     let entries: fs::ReadDir=fs::read_dir(folder_location)
         .expect("ERROR IN READING DIRECTORY FILES.");
 
-    for entry in entries{
-        if let Ok(entry) =entry{
-            let path=entry.path();
+    for entry in entries.flatten(){
+        let path=entry.path();
 
-            if path.is_file() && path.extension().and_then(|s| s.to_str())==Some("txt"){
-                let contents=fs::read_to_string(&path)
-                .unwrap_or_else(|_| panic!("FAILED TO READ FILES{:?}",path));
-                all_contents.push_str(&contents);
-                all_contents.push_str("<|endoftext|>\n\n\n");
-            }
-        } 
+        if path.is_file() && path.extension().and_then(|s| s.to_str())==Some("txt"){
+            let contents=fs::read_to_string(&path)
+            .unwrap_or_else(|_| panic!("FAILED TO READ FILES{:?}",path));
+            all_contents.push_str(&contents);
+            all_contents.push_str("<|endoftext|>\n\n\n");
+        }
     }
     all_contents
 }
@@ -86,21 +84,27 @@ fn adjust_pairs(pair_count:&mut IndexMap<(u16,u16),usize>,pair:(u16,u16),delta:i
     //This signifacantly fastens our bpe.
     if delta>0{
         *pair_count.entry(pair).or_insert(0)+=delta as usize;
-    }else if delta<0{
-        if let Some(c)=pair_count.get_mut(&pair){
+    }else if delta<0 && let Some(c)=pair_count.get_mut(&pair){
             *c=c.saturating_sub((-delta) as usize);
             if *c==0{
                 pair_count.swap_remove(&pair);
-            }
-        } 
+            }    
     }
 }
 
-fn split_text<'a>(text: &'a str)->Vec<&'a str>{
+fn split_text(text: &str)->Vec<&str>{
     // 'a is a rust lifetime label which gurantess that the string slices &str can never outlive orignal text.
     //This approach prevents rust from dangling pointers without sacrificing any runtime cost.
-    let special_regex = Regex::new(r"<\|endoftext\|>|\[cite\]").unwrap();
-    let clean_text_way = Regex::new(r"<\|endoftext\|>|\[cite\]|\$| ?\p{L}+| ?\p{N}+|[^\s\p{L}\p{N}$]+|\s+").unwrap();
+
+    static SPECIAL_REGEX:OnceLock<Regex>=OnceLock::new();
+    static CLEAN_TEXT_REGEX:OnceLock<Regex>=OnceLock::new();
+
+    let special_regex=SPECIAL_REGEX.get_or_init(|| 
+        {Regex::new(r"<\|endoftext\|>|\[cite\]").unwrap()
+    }); 
+    let clean_text_way = CLEAN_TEXT_REGEX.get_or_init(|| 
+        {Regex::new(r"<\|endoftext\|>|\[cite\]|\$| ?\p{L}+| ?\p{N}+|[^\s\p{L}\p{N}$]+|\s+").unwrap()
+    });
     //These 2 specific line is the heart of the entire code. it tells the computer whr to chop the string into smaller units.
     //Because we needs to preserve $ and [cite] and hence they are given the priority and the code splits them first.
     //It is important to note that i did consider fancy-regex over normal regex as used in tiktoken to account for backtracking of tokens but considering the effeciency trade-off i went with standard regex.
@@ -265,13 +269,19 @@ fn bpe(text: &str){
     println!("\nSUCCESS:6 BYTE PACKED RULES ARE WRITTEN IN THE BINARY FILE COMPLETELY.\n");
 }
 
+
 fn loader(file_path:&str)->Vec<((u16,u16),u16)> {
     let net_bytes=fs::read(file_path)
         .expect("FAILED TO READ BINARY FILE.");
+    assert_eq!(net_bytes.len() % 6,
+        0,
+        "CORRUPTED BINARY FILE. FLIE SIZE({} BYTES) ISNT A MULTIPLE OF 6",
+        net_bytes.len()
+    );
     let mut merges=Vec::new();
     //This vector represents the entire history of all the iterations.
 
-    for chunk in net_bytes.chunks_exact(6){
+    for chunk in net_bytes.as_chunks::<6>().0{
         let left=u16::from_le_bytes(chunk[0..2].try_into().unwrap());
         //Grabs the first 2 chunks.
 
@@ -305,9 +315,22 @@ fn build_vocab(merges:&[((u16,u16),u16)])->HashMap<u16,Vec<u8>>{
     vocab
 }
 
-fn encode(text: &str,merges:&[((u16,u16),u16)])->Vec<u16>{
+
+struct Tokenizer{
+    vocab:HashMap<u16,Vec<u8>>,
+    merges:HashMap<(u16,u16),u16>,
+}
+
+impl Tokenizer{
+    fn new(merges_list: &[((u16,u16),u16)])->Tokenizer{
+        Tokenizer{
+            vocab:build_vocab(merges_list),
+            merges:merges_list.iter().copied().collect(),
+        }
+    }
+    
+    fn encode(&self,text: &str)->Vec<u16>{
     let clean_text=split_text(text);
-    let merges_for_encoding:HashMap<(u16,u16),u16>=merges.iter().copied().collect();
 
     let mut encoded_chunks:Vec<u16>=Vec::new();
     for chunk in &clean_text{
@@ -325,15 +348,14 @@ fn encode(text: &str,merges:&[((u16,u16),u16)])->Vec<u16>{
             let mut best_merge:Option<((u16,u16),u16)>=None;
             for pair in byte_tokens.windows(2){
                 let p=(pair[0],pair[1]);
-                if let Some(&merged_id)=merges_for_encoding.get(&p){
-                    if best_merge.map_or(true,|(_, best_id)|merged_id<best_id){
+                if let Some(&merged_id)=self.merges.get(&p)
+                    && best_merge.is_none_or(|(_, best_id)|merged_id<best_id){
                         //best_merge is an option which originally starts as None and after the loop holds our best pair.
                         //This line handles the cases if best merge is none than it returns true.
                         //If best merge pair is something else it ignores the pair and runs merged_id<best_id and returns true only if the new pair has a smaller merged_id.
                         //Signifying it was learned during training.
                         best_merge=Some((p, merged_id));
                     }
-                } 
             }
             let Some(((left_id,right_id),merged_id))=best_merge else{
                 break;
@@ -345,15 +367,17 @@ fn encode(text: &str,merges:&[((u16,u16),u16)])->Vec<u16>{
     encoded_chunks
 }
 
-fn decode(ids:&[u16],vocab:&HashMap<u16,Vec<u8>>)->Result<String,String>{
-    let mut bytes:Vec<u8>=Vec::with_capacity(ids.len()*4);
-    //This line estimates that each BPE token expands to roughly 4 bytes (4 characters) of text on average.Even if off by little rust can expand the vector sometimes rather than everytime.
+    fn decode(&self,ids:&[u16])->Result<String,String>{
+        let mut bytes:Vec<u8>=Vec::with_capacity(ids.len()*4);
+        //This line estimates that each BPE token expands to roughly 4 bytes (4 characters) of text on average.Even if off by little rust can expand the vector sometimes rather than everytime.
 
-    for &id in ids{
-        let token_bytes=vocab
-            .get(&id)
-            .ok_or_else(|| format!("UNKNOWN TOKEN ID IN DECODE {}",id))?;
-        bytes.extend_from_slice(token_bytes);
-    }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+        for &id in ids{
+            let token_bytes=self.vocab
+                .get(&id)
+                .ok_or_else(|| format!("UNKNOWN TOKEN ID IN DECODE {}",id))?;
+            bytes.extend_from_slice(token_bytes);
+        }
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 }

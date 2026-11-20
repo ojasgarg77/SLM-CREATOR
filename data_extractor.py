@@ -50,17 +50,6 @@ LIGATURE_AND_UNICODE_DICTIONARY={
 
 TRANSLATION_TABLE=str.maketrans(LIGATURE_AND_UNICODE_DICTIONARY)
 
-def get_english_tokens():
-    english_txt_files=[]
-    base_path=Path(__file__).parent /"dataset" / "english_dataset"
-    if not base_path.is_dir():
-        print("""THE DIRECTORY ("english_dataset") DOES NOT EXIST.""")
-        return english_txt_files
-    for english_files in sorted(base_path.glob("*.txt")):
-        print(f"TXT {english_files.name} found.")
-        english_txt_files.append(english_files)
-    return english_txt_files
-
 def get_arxiv_tokens():
     arxiv_txt_files=[]
     base_path=Path(__file__).parent /"dataset" / "arxiv_texts"
@@ -84,17 +73,6 @@ def total_char_count_dic():
         count=0
         all_text=path.read_text(encoding="utf-8",errors="ignore")
         all_text=clean_text(all_text)
-        for fancy,plain in LIGATURE_AND_UNICODE_DICTIONARY.items():
-            all_text=all_text.replace(fancy,plain)
-        for line in all_text.splitlines():
-            count+=len(line)
-        output_counts[path.name]=count
-
-
-    english_files=get_english_tokens()
-    for path in english_files:
-        count=0
-        all_text=path.read_text(encoding="utf-8",errors="ignore")
         for fancy,plain in LIGATURE_AND_UNICODE_DICTIONARY.items():
             all_text=all_text.replace(fancy,plain)
         for line in all_text.splitlines():
