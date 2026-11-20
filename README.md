@@ -43,7 +43,6 @@ I do not own a GPU for my primary development environment. The NVIDIA GPU code p
   - The efficiency factor is currently 0.3 in `sizer_core/src/main.rs`. It is a placeholder, not a measurement. Against a bf16 baseline the realistic range is about 0.1-0.35, and I plan to lower it to about 0.2 until I can measure it (see "Measuring the efficiency factor" below).
 
 - 🔧 **Data collection and extraction**:
-  - `download_english_data.py`: streams the first 500,000 sentences of a cleaned BookCorpus dataset from Hugging Face into `dataset/english_dataset/english_data.txt` (about 41.5M characters). It skips the download if the file already exists, and it loads a `.env` file for the Hugging Face token (see Setup). This is general English fiction, already lowercase, and is meant as a base for English, not as neural-network content.
   - `download_arxiv_text.py`: interactively prompts the user for the number of papers to download, searches arXiv for papers matching a specific NLP/ML/LLM query string, fetches each paper's ar5iv HTML page, and writes structured text files to `dataset/arxiv_texts/<arxiv_id>.txt` with fields: `title--`, `arxiv id--`, `abstract--`, and `body--`. Cleaning and processing steps include:
     - Lowercasing non-math content while protecting LaTeX math blocks.
     - Normalizing typographic Unicode in prose (not in math) to plain ASCII through `LIGATURE_AND_UNICODE_DICTIONARY` in `process_prose_nodes`: ligatures (`ﬁ` to `fi`), curly quotes, the different dashes and the minus sign to `-`, the ellipsis character to `...`, the many Unicode space characters to a normal space, and zero-width characters and soft hyphens removed.
@@ -52,15 +51,11 @@ I do not own a GPU for my primary development environment. The NVIDIA GPU code p
     - Replacing in-text citations with a `[cite]` placeholder.
     - Filtering out author info, affiliations, bibliographies, footnotes, figures, and irrelevant tables.
     - Skipping existing files and handling/deleting corrupt or empty files.
-  - `data_extractor.py`: scans the text files in `dataset/arxiv_texts/` and `dataset/english_dataset/`. It cleans typographic ligatures (such as "ﬀ" to "ff", "ﬁ" to "fi", etc.) using `LIGATURE_AND_UNICODE_DICTIONARY`, counts characters across lines for all sources, and estimates total tokens (`main()`) at 4 characters per token to pass back to `architecture.py`. The 4 characters per token figure is a rough guess. Now that the tokenizer can encode text, it can be replaced by a measured figure (see "To do (data)" below). PDF input was removed; all arXiv text now comes from the ar5iv HTML download.
+  - `data_extractor.py`: scans the text files in `dataset/arxiv_texts/`. It cleans typographic ligatures (such as "ﬀ" to "ff", "ﬁ" to "fi", etc.) using `LIGATURE_AND_UNICODE_DICTIONARY`, counts characters across lines for all sources, and estimates total tokens (`main()`) at 4 characters per token to pass back to `architecture.py`. The 4 characters per token figure is a rough guess. Now that the tokenizer can encode text, it can be replaced by a measured figure (see "To do (data)" below). PDF input and standard english data download  was removed; all text now comes from the ar5iv HTML download.
     - The `\beta` entry in the `\mathrm|\mathit|...` math regex looks like a leftover; check that it does not eat real `\beta` symbols.
   - To do (arXiv):
     - Check why some papers (for example Adam, 1412.6980) appear to convert only partially, and add a check for partial pages.
-    - Re-run the table rule on more papers to confirm it.
-    - Decide what mentions like "Eq. 2" should become now that equation labels are dropped (for example a placeholder token, like `[cite]`).
-    - Confirm the LaTeX style stripping with frequency counts over many papers.
-  - To do (cleaning, English data): normalize the spacing around punctuation in the English data, drop ebook boilerplate and URL lines, and share one cleaning function (and one Unicode dictionary) between all sources (the extractor still uses the short dictionary, the arXiv script the full one).
-  - To do (data): collect much more on-topic neural-network text, because on-topic text is only a small share of the current mix and, once the benchmark is fixed, the data limit is likely to be the binding one. Cleaned arXiv papers are much shorter than raw PDFs, so the number of papers needed is likely higher than first estimated; measure tokens per usable paper on a sample. Also replace the 4-characters-per-token guess with a measured number: encode a sample with the real tokenizer and divide characters by tokens (the figure will differ between arXiv text and English fiction).
+  - To do (data): collect much more on-topic neural-network text, because on-topic text is only a small share of the current mix and, once the benchmark is fixed, the data limit is likely to be the binding one. Cleaned arXiv papers are much shorter than raw PDFs, so the number of papers needed is likely higher than first estimated; measure tokens per usable paper on a sample. Also replace the 4-characters-per-token guess with a measured number: encode a sample with the real tokenizer and divide characters by tokens.
 
 - 🔧 **Tokenizer** (`tokenizer_core`, Rust, work in progress): a byte-level BPE tokenizer trained from scratch. `[cite]` and `$` must each stay a single chunk, and whitespace must be preserved exactly.
   - **Token IDs** (`u16`, so up to 65,535): 0-255 are the raw bytes, 256 is `[cite]`, 257 is `<|endoftext|>`, and 258 onward are merged tokens numbered in the order they are learned.
@@ -81,16 +76,10 @@ I do not own a GPU for my primary development environment. The NVIDIA GPU code p
     - Nothing encodes the whole dataset into a stored token stream yet; that belongs to the ingestion stage.
     - `encode()` rebuilds its merge lookup table on every call. This is fine for one sample sentence but must be built once and passed in before encoding a whole corpus.
     - `decode()` converts bytes to text leniently (invalid UTF-8 becomes a replacement character instead of an error). This is harmless for a complete sequence, but a cut-off sequence can end in the middle of a multi-byte character.
-    - The incremental pair counts have not been checked against a full recount (see tests below).
+    - - The incremental pair counts have not been checked against a full recount (see tokenizer test rules in `docs/`).The incremental pair counts have not been checked against a full recount (see tests below).
     - The input path is relative (`../dataset/arxiv_texts`) and the output goes to the current folder, so for now the program must be run from inside `tokenizer_core`.
-  - **Open decisions:** whether 16,384 is the final vocabulary size (it sets the embedding table size, and with it a share of the parameter budget); whether the tokenizer should also train on the English text; whether the metadata lines (`title--`, `arxiv id--`, ...) stay in the training text; and whether a space should attach to the following word (currently spaces are separate chunks).
-  - **Tests to add:**
-    - Training with incremental updates must give exactly the same merges as the old way (recount everything every iteration) on a small corpus; also compare the pair counts against a full recount every few merges.
-    - Joining the chunks must reproduce the original text exactly.
-    - The number of `[cite]` occurrences in the text must equal the number of ID 256 in the encoded output (and likewise `<|endoftext|>` and 257).
-    - `merges.bin` size must be a multiple of 6 and equal 6 x the number of merges. `loader()` currently ignores a partial record at the end of the file without any error, so a damaged file would load silently.
-    - Round trip on many inputs, not one sentence: decoding after encoding must give back the original text, including multi-byte characters, empty strings, runs of spaces, and text that never occurred in training.
-    - Encoding text that was in the training data must give the same segmentation that training produced (the replay order really matches the learned order).
+  - **Open decisions:** whether 16,384 is the final vocabulary size (it sets the embedding table size, and with it a share of the parameter budget); whether the metadata lines (`title--`, `arxiv id--`, ...) stay in the training text; and whether a space should attach to the following word (currently spaces are separate chunks).
+  - **Tokenizer test rules:** tokenizer test results are logged in [docs/tokenizer_test_results.md](docs/tokenizer_test_results.md). 
 
 - ⏳ Dataset specialization matching: not started.
 - ⏳ Rust ingestion pipeline (batching and streaming; tokenizing builds on `tokenizer_core`): not started.
@@ -114,17 +103,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-`requirements.txt` contains `torch` (the TFLOPS benchmark), `datasets` and `python-dotenv` (the English download), `arxiv` and `requests` (finding and fetching arXiv papers), and `beautifulsoup4` (parsing the ar5iv HTML). The correct PyTorch build depends on your hardware (NVIDIA, AMD, or CPU-only), so use the selector on the PyTorch website if the default `pip install torch` does not match your machine.
-
-### Hugging Face token (`.env`)
-
-`download_english_data.py` loads a `.env` file from the project root with `python-dotenv`, so a Hugging Face access token can be provided there:
-
-```
-HF_TOKEN=your_token_here
-```
-
-The `.env` file holds a secret, so it must be listed in `.gitignore` and never committed.
+`requirements.txt` contains `torch` (the TFLOPS benchmark), `arxiv` and `requests` (finding and fetching arXiv papers), and `beautifulsoup4` (parsing the ar5iv HTML). The correct PyTorch build depends on your hardware (NVIDIA, AMD, or CPU-only), so use the selector on the PyTorch website if the default `pip install torch` does not match your machine.
 
 ### Building the Rust programs
 
@@ -151,7 +130,6 @@ The `dataset/` folder is not part of the repository (it is listed in `.gitignore
 ```
 dataset/
   arxiv_texts/       created by download_arxiv_text.py
-  english_dataset/   created by download_english_data.py
 ```
 
 ### Running
@@ -159,7 +137,6 @@ dataset/
 Run the Python scripts from the project root:
 
 ```bash
-python download_english_data.py   # one-time English text download (needs internet)
 python download_arxiv_text.py     # downloads and cleans arXiv papers as text (needs internet)
 python architecture.py            # hardware detection, benchmark, token count and sizing
 ```

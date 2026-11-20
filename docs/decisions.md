@@ -87,3 +87,10 @@ One entry per decision or dropped idea, with the reason. Code history lives in g
   - Reason: cheapest possible guard against a broken `build_vocab`, `encode` or `decode`. It also proves that special tokens survive.
   - Honest limit: it is one sentence, so it does not count as a test suite. Real tests (many inputs, multi-byte characters, empty strings, unseen text, segmentation equal to training) are still on the list in the README.
 - **Next use of the tokenizer: measure real characters per token.** The sizing step still assumes 4 characters per token in `data_extractor.py`. With `encode` available, the number can be measured on samples of arXiv text and of the English text and replace the guess, because the data limit in `sizer_core` depends directly on it.
+
+## 2026-11-21
+
+- **Dropped `download_english_data` and `english_dataset`; wired pipeline to arXiv text.** Removed the external English dataset downloader and `dataset/english_dataset/` references from the workflow and README, keeping ingestion focused on the arXiv text pipeline (`dataset/arxiv_texts/`)[cite: 3].
+  - Reason: aligns the active setup with the domain-specific arXiv corpus (`~3.65` bytes/token on the initial 10-paper check) rather than off-topic fiction data[cite: 3, 4].
+- **Validated `merges.bin` (`16,384` vocab, `16,126` merges) with sample, corpus, and niche edge-case checks.** Tested lossless round-trip encoding/decoding, ID bounds (`< 16,384`), special token counts (`[cite]` = `256`, `<|endoftext|>` = `257`), compression ratios (`B/T` and `C/T`), and tricky inputs (adjacent/glued special tokens, partial/malformed tags, LaTeX and Unicode math expressions, code indentation, repeated tokens, and unseen strings) alongside a 10-paper arXiv sample (`464,263` bytes -> `127,082` tokens, `3.65` bytes/token).
+  - Reason: confirms round-trip fidelity, special token preservation, and expected token overhead on formula-dense math before wiring full-corpus `train.bin` / `val.bin` export.

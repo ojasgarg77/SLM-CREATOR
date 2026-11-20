@@ -8,5 +8,4 @@ __pycache__/
 
 dataset/
 tests.py
-.env
 tokenizer_core/merges.bin
