@@ -79,7 +79,7 @@ I do not own a GPU for my primary development environment. The NVIDIA GPU code p
     - - The incremental pair counts have not been checked against a full recount (see tokenizer test rules in `docs/`).The incremental pair counts have not been checked against a full recount (see tests below).
     - The input path is relative (`../dataset/arxiv_texts`) and the output goes to the current folder, so for now the program must be run from inside `tokenizer_core`.
   - **Open decisions:** whether 16,384 is the final vocabulary size (it sets the embedding table size, and with it a share of the parameter budget); whether the metadata lines (`title--`, `arxiv id--`, ...) stay in the training text; and whether a space should attach to the following word (currently spaces are separate chunks).
-  - **Tokenizer test rules:** tokenizer test results are logged in [docs/tokenizer_test_results.md](docs/tokenizer_test_results.md). 
+  - **Tokenizer test rules:** tokenizer test results are logged in [docs/tokenizer_tests_results.md](docs/tokenizer_tests_results.md). 
 
 - ⏳ Dataset specialization matching: not started.
 - ⏳ Rust ingestion pipeline (batching and streaming; tokenizing builds on `tokenizer_core`): not started.
