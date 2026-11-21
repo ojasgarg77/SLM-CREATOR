@@ -83,7 +83,7 @@ def total_char_count_dic():
 def main():
     dataset_files_and_values=total_char_count_dic()
     total_char_count=int(sum(dataset_files_and_values.values()))
-    total_dataset_tokens=int(total_char_count//3.61)
+    total_dataset_tokens=int(total_char_count//3.5)
     print(f"TOTAL TOKENS IN THE DATASET IS {total_dataset_tokens}")
     return total_dataset_tokens
 

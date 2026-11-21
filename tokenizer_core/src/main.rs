@@ -2,7 +2,7 @@ use std::{collections::HashMap, fs::{self, File}, io::{BufWriter,Write}, path::P
 use regex::{Regex};
 use indexmap::IndexMap;
 
-const NET_MERGES:u16=16126;
+const NET_MERGES:u16=8952;
 //NET_MERGES can never exceed 65,278 because u16 limits us to 65,536 total IDs.
 
 
@@ -100,10 +100,10 @@ fn split_text(text: &str)->Vec<&str>{
     static CLEAN_TEXT_REGEX:OnceLock<Regex>=OnceLock::new();
 
     let special_regex=SPECIAL_REGEX.get_or_init(|| 
-        {Regex::new(r"<\|endoftext\|>|\[cite\]").unwrap()
+        {Regex::new(r"<\|endoftext\|>|\[cite\]|\[title\]|\[abstract\]|\[body\]|\[section\]|\[eq\]|\[proof\]").unwrap()
     }); 
-    let clean_text_way = CLEAN_TEXT_REGEX.get_or_init(|| 
-        {Regex::new(r"<\|endoftext\|>|\[cite\]|\$| ?\p{L}+| ?\p{N}+|[^\s\p{L}\p{N}$]+|\s+").unwrap()
+    let clean_text_way=CLEAN_TEXT_REGEX.get_or_init(|| 
+        {Regex::new(r"<\|endoftext\|>|\[cite\]|\[title\]|\[abstract\]|\[body\]|\[section\]|\[eq\]|\[proof\]|\$| ?\p{L}+| ?\p{N}+|[^\s\p{L}\p{N}$]+|\s+").unwrap()
     });
     //These 2 specific line is the heart of the entire code. it tells the computer whr to chop the string into smaller units.
     //Because we needs to preserve $ and [cite] and hence they are given the priority and the code splits them first.
@@ -170,6 +170,18 @@ fn bpe(text: &str){
             //This line assigns the [cite] chunk the token number 256.
         }else if *chunk=="<|endoftext|>"{
             vec![257]
+        }else if *chunk=="[title]"{
+            vec![258]
+        }else if *chunk=="[abstract]"{
+            vec![259]
+        }else if *chunk=="[body]"{
+            vec![260]
+        }else if *chunk=="[section]"{
+            vec![261]
+        }else if *chunk=="[eq]"{
+            vec![262]
+        }else if *chunk=="[proof]"{
+            vec![263]
         }else{
             chunk.as_bytes().iter().map(|&b| b as u16).collect()
             //The function .as_bytes() performs an O(1) operation and treats string silence directly in u8 bytes
@@ -188,7 +200,7 @@ fn bpe(text: &str){
     //I then converts that hash map into a vector of tuples (Vec<u16>, usize). 
     //This vector represents the entire text corpus broken down into unique, weighted token sequences.
 
-    let mut next_token_id:u16=258;
+    let mut next_token_id:u16=264;
     //We chose 258 for new merged tokens as avoids overlapping with any pre existing characters or special tokens.
     //ID(s)-
     //(0-255)->ASCII/UTF-8 characters
@@ -304,6 +316,12 @@ fn build_vocab(merges:&[((u16,u16),u16)])->HashMap<u16,Vec<u8>>{
     }
     vocab.insert(256,b"[cite]".to_vec());
     vocab.insert(257,b"<|endoftext|>".to_vec());
+    vocab.insert(258,b"[title]".to_vec());
+    vocab.insert(259,b"[abstract]".to_vec());
+    vocab.insert(260,b"[body]".to_vec());
+    vocab.insert(261,b"[section]".to_vec());
+    vocab.insert(262,b"[eq]".to_vec());
+    vocab.insert(263,b"[proof]".to_vec());
     
     for &((left,right),merged_id) in merges{
         let mut combined=vocab[&left].clone();
@@ -314,7 +332,6 @@ fn build_vocab(merges:&[((u16,u16),u16)])->HashMap<u16,Vec<u8>>{
     }
     vocab
 }
-
 
 struct Tokenizer{
     vocab:HashMap<u16,Vec<u8>>,
@@ -342,7 +359,30 @@ impl Tokenizer{
             encoded_chunks.push(257);
             continue;
         }
-
+        if *chunk=="[title]"{
+            encoded_chunks.push(258);
+            continue;
+        }
+        if *chunk=="[abstract]"{
+            encoded_chunks.push(259);
+            continue;
+        }
+        if *chunk=="[body]"{
+            encoded_chunks.push(260);
+            continue;
+        }
+        if *chunk=="[section]"{
+            encoded_chunks.push(261);
+            continue;
+        }
+        if *chunk=="[eq]"{
+            encoded_chunks.push(262);
+            continue;
+        }
+        if *chunk=="[proof]"{
+            encoded_chunks.push(263);
+            continue;
+        }
         let mut byte_tokens:Vec<u16>=chunk.as_bytes().iter().map(|&b| b as u16).collect();
         while byte_tokens.len()>=2{
             let mut best_merge:Option<((u16,u16),u16)>=None;

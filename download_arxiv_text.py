@@ -34,9 +34,9 @@ def clean_math_output(soup):
 
         if latex_annotation:
             raw_latex=latex_annotation.get_text(strip=True)
-            raw_latex=re.sub(r'\\(mathrm|mathit|mathbf|mathsf|mathtt|beta)\s*{(.*?)}',r'\2',raw_latex)
+            raw_latex=strip_font_commands(raw_latex)
             raw_latex=re.sub(r'\\(it|bf|rm|sf|tt)\s+([a-zA-Z0-9_+\-=<>!*()]+)', r'\2',raw_latex)
-            raw_latex=re.sub(r'\s+', '',raw_latex)
+            raw_latex=clean_math_whitespaces(raw_latex)
             clean_latex=f"${raw_latex}$"
 
             if not clean_latex.startswith("$"):
@@ -47,11 +47,53 @@ def clean_math_output(soup):
         else:
             fallback_text = math_tag.get_text(separator="",strip=True)
             if fallback_text:
-                fallback_text=re.sub(r'\s+', '',fallback_text)
+                fallback_text=clean_math_whitespaces(fallback_text)
                 math_tag.replace_with(f"${fallback_text}$")
             else:
                 math_tag.decompose()
     return soup
+
+def strip_font_commands(latex:str)->str:
+    pattern=re.compile(r'\\(mathrm|mathit|mathbf|mathsf|mathtt)\s*{')
+    while True:
+        match=pattern.search(latex)
+        if not match:
+            break
+        start=match.start()
+        brace_start=match.end()-1
+        depth=0
+        end=-1
+        for i in range (brace_start,len(latex)):
+            if latex[i]=="{":
+                depth+=1
+            elif latex[i]=="}":
+                depth-=1
+                if depth==0:
+                    end=i
+                    break
+        if end !=-1:
+            inner=latex[brace_start+1:end]
+            latex=latex[:start]+inner+latex[end+1:]
+        else:
+            latex=latex[:start]+latex[brace_start+1:]
+    return latex
+
+def clean_math_whitespaces(latex:str)->str:
+    parts=latex.split()
+    if not parts:
+        return ""
+    out=[parts[0]]
+    for part in parts[1:]:
+        if re.search(r"\\[a-zA-Z]+$",out[-1]) and re.match(r"^[a-zA-Z]",part):
+            out.append(" "+ part)
+        else:
+            out.append(part)
+    return "".join(out)
+
+def normalize_metadata(text:str)->str:
+    text=unicodedata.normalize("NFKC",text).lower()
+    text=re.sub(r"\s+"," ",text).strip()
+    return text
 
 def process_prose_nodes(container_nodes):
 
@@ -135,17 +177,18 @@ def download_txt_arxiv(download_dir:Path,query:str="cat:cs.LG AND 'neural networ
     client=arxiv.Client()
     search_query=arxiv.Search(
         query=query,
-        max_results=max_results,
+        max_results=5000,
         sort_by=arxiv.SortCriterion.Relevance
     )
 
-    results=list(client.results(search_query))
-    if len(results)==0:
-        print("NO RESULTS MATCHING THE QUERY.")
-        return 0
     download_count=0
+    session=requests.Session()
+    session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ResearchScript/1.0"})
+    display_eq_classes={"ltx_eqn_block","ltx_equation","ltx_equationgroup","ltx_eqn_row","ltx_displaymath"}
 
-    for i,paper in enumerate(results):
+    for paper in client.results(search_query):
+        if download_count>=max_results:
+            break
         clean_arxiv_id=paper.entry_id.split("/abs/")[-1].rsplit("v", 1)[0]
         filename = f"{clean_arxiv_id}.txt"
         filepath=download_dir/filename
@@ -161,8 +204,6 @@ def download_txt_arxiv(download_dir:Path,query:str="cat:cs.LG AND 'neural networ
         ar5iv_url="https://ar5iv.labs.arxiv.org/html/"+clean_arxiv_id
 
         try:
-            session=requests.Session()
-            session.headers.update({"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) ResearchScript/1.0"})
             response=session.get(ar5iv_url,stream=True,timeout=30)
 
             if response.status_code==200:
@@ -212,6 +253,7 @@ def download_txt_arxiv(download_dir:Path,query:str="cat:cs.LG AND 'neural networ
                         "ltx_equationgroup",
                         "ltx_eqn_row",
                         "ltx_displaymath",
+                        "ltx_proof",
                         "ltx_title_section",
                         "ltx_title_subsection",
                         "ltx_title_subsubsection",
@@ -223,20 +265,33 @@ def download_txt_arxiv(download_dir:Path,query:str="cat:cs.LG AND 'neural networ
 
                     content_set={id(el) for el in content_elements}
                     filtered_elements=[]
-                    for el in content_elements:
-                        if not any(id(parent) in content_set for parent in el.parents):
-                            filtered_elements.append(el)
+                    filtered_elements = [
+                        el
+                        for el in content_elements
+                        if not any(id(parent) in content_set for parent in el.parents)
+                    ]
 
                     text_blocks=[]
-                    last_text=(
-                        None
-                    )
+                    last_text = None
                     for el in filtered_elements:
+                        el_classes = set(el.get("class", []))
                         text=el.get_text(separator=" ", strip=True)
-                            
-                        if text and text!=last_text:
-                            text_blocks.append(text)
-                            last_text=text
+                        if not text:
+                            continue
+
+                        if el_classes & display_eq_classes:
+                            formatted_block=f"[eq] {text}"
+                        elif "ltx_proof" in el_classes:
+                            cleaned_proof=re.sub(r"^proof[\.\:\s]+", "", text, flags=re.IGNORECASE)
+                            formatted_block=f"[proof] {cleaned_proof}"
+                        elif "ltx_title_section" in el_classes:
+                            formatted_block=f"[section] {text}"
+                        else:
+                            formatted_block=text
+
+                        if formatted_block!=last_text:
+                            text_blocks.append(formatted_block)
+                            last_text=formatted_block
 
                     full_paper="\n\n".join(text_blocks)
                 else:
@@ -244,17 +299,16 @@ def download_txt_arxiv(download_dir:Path,query:str="cat:cs.LG AND 'neural networ
 
                 full_paper=clean_paper_text(full_paper)
 
-                if len(full_paper.strip())<=100:
+                if len(full_paper.strip())<=500:
                     print("WARNING--BODY EXTRACTION HAS FAILED.")
                     time.sleep(2)
                     continue
 
 
                 file_content=(
-                    f"title--{unicodedata.normalize('NFKC', paper.title).lower()}\n"
-                    f"arxiv id--{clean_arxiv_id}\n"
-                    f"abstract--{unicodedata.normalize('NFKC', paper.summary).lower()}\n"
-                    f"body--{full_paper}\n\n")
+                    f"[title] {normalize_metadata(paper.title)}\n"
+                    f"[abstract] {normalize_metadata(paper.summary)}\n"
+                    f"[body] {full_paper}\n\n")
 
 
                 with open(filepath,"w",encoding="utf-8") as f:
@@ -283,7 +337,7 @@ def download_txt_arxiv(download_dir:Path,query:str="cat:cs.LG AND 'neural networ
 if __name__=="__main__":
     target_directory=Path(__file__).parent/"dataset"/"arxiv_texts"
     query_string=(
-    '(cat:cs.LG OR cat:cs.NE OR stat.ML) AND '
+    '(cat:cs.LG OR cat:cs.NE OR cat:stat.ML) AND '
     '("neural network" OR "deep learning" OR "backpropagation" OR "transformer" OR '
     '"attention mechanism" OR "gradient descent" OR "layer normalization" OR "activation function") '
     'ANDNOT ("clinical" OR "survey" OR "medical" OR "forecasting")'
