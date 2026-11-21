@@ -57,7 +57,6 @@ def get_arxiv_tokens():
         print("""THE DIRECTORY ("arxiv_texts") DOES NOT EXIST.""")
         return arxiv_txt_files
     for arxiv_files in sorted(base_path.glob("*.txt")):
-        print(f"TXT {arxiv_files.name} found.")
         arxiv_txt_files.append(arxiv_files)
     return arxiv_txt_files
 
@@ -84,7 +83,7 @@ def total_char_count_dic():
 def main():
     dataset_files_and_values=total_char_count_dic()
     total_char_count=int(sum(dataset_files_and_values.values()))
-    total_dataset_tokens=total_char_count//4
+    total_dataset_tokens=int(total_char_count//3.61)
     print(f"TOTAL TOKENS IN THE DATASET IS {total_dataset_tokens}")
     return total_dataset_tokens
 

@@ -130,7 +130,7 @@ def process_prose_nodes(container_nodes):
                 cleaned_text=cleaned_text.replace(unicode_char,replacements)
             node.replace_with(cleaned_text)
 
-def download_txt_arxiv(download_dir:Path,query:str="cat:cs.LG AND 'neural networks'",max_results:int=3)->int:
+def download_txt_arxiv(download_dir:Path,query:str="cat:cs.LG AND 'neural networks'",max_results:int=30)->int:
     download_dir.mkdir(parents=True,exist_ok=True)
     client=arxiv.Client()
     search_query=arxiv.Search(

@@ -100,20 +100,21 @@ fn main() {
 ### Effectiveness Check Results
 
 ```text
+FOUND EXISTING merges.bin. SKIPPING BPE TRAINING.
+
 LOADED 16126 MERGE RULES.
 STARTING SAMPLE TESTS
 
 SAMPLE: "Neural networks learned through [cite] backpropagation [cite] <|endoftext|>"
-TOKEN IDS(12 tokens):[12808, 1351, 763, 2218, 1322, 32, 256, 2349, 32, 256, 32, 257]
+TOKEN IDS(13 tokens):[78, 101, 1381, 685, 2208, 1326, 32, 256, 1718, 32, 256, 32, 257]
 DECODED: "Neural networks learned through [cite] backpropagation [cite] <|endoftext|>"
 toks= 0 | bytes=  0 | B/T=0.00 | C/T=0.00 | [cite]=0/0 | eot=0/0 | ""
 toks= 5 | bytes=  7 | B/T=1.40 | C/T=1.40 | [cite]=0/0 | eot=0/0 | "   \n\t  "
 toks= 7 | bytes= 62 | B/T=8.86 | C/T=8.86 | [cite]=0/0 | eot=0/0 | "backpropagation gradient descent adam optimizer neural network"
 toks=30 | bytes= 73 | B/T=2.43 | C/T=2.43 | [cite]=1/1 | eot=0/0 | "loss = cross_entropy(logits, targets) where $x_i \\in \\mathbb{R}^d$ [cite]"
-toks=19 | bytes= 69 | B/T=3.63 | C/T=3.63 | [cite]=1/1 | eot=1/1 | "unseen_xyz_token_12345 and normal words together [cite] <|endoftext|>"
-toks=32 | bytes= 49 | B/T=1.53 | C/T=1.12 | [cite]=0/0 | eot=0/0 | "π θ α β λ — “quotes” … spaces   test"
+toks=18 | bytes= 69 | B/T=3.83 | C/T=3.83 | [cite]=1/1 | eot=1/1 | "unseen_xyz_token_12345 and normal words together [cite] <|endoftext|>"toks=31 | bytes= 49 | B/T=1.58 | C/T=1.16 | [cite]=0/0 | eot=0/0 | "π θ α β λ — “quotes” … spaces   test"
 
-FIRST 10 PAPERS: 464263 bytes -> 127082 tokens (3.65 bytes/token)
+FIRST 10 PAPERS: 487146 bytes -> 135092 tokens (3.61 bytes/token)
 ```
 
 ---
@@ -275,17 +276,17 @@ LOADED 16126 MERGE RULES.
 STARTING SAMPLE TESTS
 
 SAMPLE: "Neural networks learned through [cite] backpropagation [cite] <|endoftext|>"
-TOKEN IDS(12 tokens):[12808, 1351, 763, 2218, 1322, 32, 256, 2349, 32, 256, 32, 257]
+TOKEN IDS(13 tokens):[78, 101, 1381, 685, 2208, 1326, 32, 256, 1718, 32, 256, 32, 257]
 DECODED: "Neural networks learned through [cite] backpropagation [cite] <|endoftext|>"
 toks= 5 | bytes= 44 | B/T=8.80 | C/T=8.80 | [cite]=3/3 | eot=2/2 | "[cite][cite]<|endoftext|><|endoftext|>[cite]"
-toks=21 | bytes= 52 | B/T=2.48 | C/T=2.48 | [cite]=0/0 | eot=0/0 | "cite] [cite <endoftext> <|endoftext my_cite_function"
+toks=24 | bytes= 52 | B/T=2.17 | C/T=2.17 | [cite]=0/0 | eot=0/0 | "cite] [cite <endoftext> <|endoftext my_cite_function"
 toks=13 | bytes= 41 | B/T=3.15 | C/T=3.15 | [cite]=1/1 | eot=1/1 | "(see [cite],eq. 3)<|endoftext|>Next paper"
-toks=42 | bytes= 60 | B/T=1.43 | C/T=1.43 | [cite]=0/0 | eot=0/0 | "h^{(l+1)}_t = RMSNorm(x_t + Attn(RoPE(q_t), RoPE(k_t), v_t))"
-toks=39 | bytes= 43 | B/T=1.10 | C/T=1.10 | [cite]=0/0 | eot=0/0 | "SwiGLU(x, W, V, W_2) = (SiLU(xW) * (xV))W_2"
+toks=44 | bytes= 60 | B/T=1.36 | C/T=1.36 | [cite]=0/0 | eot=0/0 | "h^{(l+1)}_t = RMSNorm(x_t + Attn(RoPE(q_t), RoPE(k_t), v_t))"
+toks=40 | bytes= 43 | B/T=1.07 | C/T=1.07 | [cite]=0/0 | eot=0/0 | "SwiGLU(x, W, V, W_2) = (SiLU(xW) * (xV))W_2"
 toks=59 | bytes= 70 | B/T=1.19 | C/T=0.73 | [cite]=0/0 | eot=0/0 | "∇_θ L(θ) ≈ ∑_{i=1}^n ∂ℓ_i/∂θ  ‖x‖₂ ≤ 1  ﬁ ﬂ"
-toks=13 | bytes= 45 | B/T=3.46 | C/T=3.46 | [cite]=0/0 | eot=0/0 | "\n\n\n    def forward(self, x):\n        return x"
+toks=14 | bytes= 45 | B/T=3.21 | C/T=3.21 | [cite]=0/0 | eot=0/0 | "\n\n\n    def forward(self, x):\n        return x"
 toks= 5 | bytes= 23 | B/T=4.60 | C/T=4.60 | [cite]=1/1 | eot=1/1 | " [cite]  <|endoftext|> "
 toks=11 | bytes= 50 | B/T=4.55 | C/T=4.55 | [cite]=3/3 | eot=0/0 | "token token token token token [cite] [cite] [cite]"
 
-FIRST 10 PAPERS: 464263 bytes -> 127082 tokens (3.65 bytes/token)
+FIRST 10 PAPERS: 487146 bytes -> 135092 tokens (3.61 bytes/token)
 ```

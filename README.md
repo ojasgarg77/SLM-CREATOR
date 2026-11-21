@@ -36,14 +36,16 @@ I do not own a GPU for my primary development environment. The NVIDIA GPU code p
   - Verified live on an RTX 3050 laptop GPU (6144 MiB VRAM, native `bfloat16` support, median ~8.895 TFLOPS).
 
 - ✅ **Sizing** (`sizer_core`, Rust): memory, time and data limits all work, with a 100M parameter cap.
-  - Python sends four values to the Rust program over standard input, one per line: VRAM (MiB), training hours, measured TFLOPS, and the total number of training tokens. The Rust side does not care which precision produced the TFLOPS number.
+  - Python sends four values to the Rust program over standard input, one per line: VRAM (MiB), training hours, measured TFLOPS, and the total number of training tokens. The token count must be a whole number: the Rust side parses it as an integer and exits with an error on a value like `12286188.0`. The Rust side does not care which precision produced the TFLOPS number.
   - Rust parses them, computes the four limits, and prints the smallest to standard output. A token count of zero is an error, so a missing dataset cannot silently produce a zero-parameter model.
   - Python converts the result to an integer, prints it, and says so when the 100M cap is what limited the model.
   - Two failure cases are handled separately: if the sizer binary is missing, Python tells the user to set up Rust, `sizer_core` and the dataset, and waits before retrying; if the sizer runs but fails, Python shows its exit code and error output and stops, since retrying the same input would fail the same way.
   - The efficiency factor is currently 0.3 in `sizer_core/src/main.rs`. It is a placeholder, not a measurement. Against a bf16 baseline the realistic range is about 0.1-0.35, and I plan to lower it to about 0.2 until I can measure it (see "Measuring the efficiency factor" below).
+  - With the benchmark above and the 0.3 placeholder, the time limit for a 24-hour run works out to roughly 44M parameters (hand calculation; confirm by running the sizer).
 
 - 🔧 **Data collection and extraction**:
-  - `download_arxiv_text.py`: interactively prompts the user for the number of papers to download, searches arXiv for papers matching a specific NLP/ML/LLM query string, fetches each paper's ar5iv HTML page, and writes structured text files to `dataset/arxiv_texts/<arxiv_id>.txt` with fields: `title--`, `arxiv id--`, `abstract--`, and `body--`. Cleaning and processing steps include:
+  - **Current corpus: about 44.3M characters of cleaned arXiv text, estimated at 12,286,188 tokens.** The data limit (tokens x 4 / 20) is therefore about **2.46M parameters**. Every other limit is far higher, so **data is the binding constraint**. The paper count is not recorded yet (see to-do).
+  - `download_arxiv_text.py`: interactively prompts the user for the number of papers to download, searches arXiv for papers matching a query string (categories `cs.LG`, `cs.NE` and `stat.ML`, with neural-network terms such as "neural network", "transformer", "attention mechanism" and "gradient descent", excluding clinical, survey, medical and forecasting papers), fetches each paper's ar5iv HTML page, and writes structured text files to `dataset/arxiv_texts/<arxiv_id>.txt` with fields: `title--`, `arxiv id--`, `abstract--`, and `body--`. Cleaning and processing steps include:
     - Lowercasing non-math content while protecting LaTeX math blocks.
     - Normalizing typographic Unicode in prose (not in math) to plain ASCII through `LIGATURE_AND_UNICODE_DICTIONARY` in `process_prose_nodes`: ligatures (`ﬁ` to `fi`), curly quotes, the different dashes and the minus sign to `-`, the ellipsis character to `...`, the many Unicode space characters to a normal space, and zero-width characters and soft hyphens removed.
     - Extracting and cleaning math output (`clean_math_output`) to keep expressions in `$` LaTeX delimiters using HTML annotations or fallback text. Style commands (`\mathrm`, `\mathbf`, `\it`, `\bf`, ...) are stripped and whitespace inside math is removed.
@@ -51,11 +53,26 @@ I do not own a GPU for my primary development environment. The NVIDIA GPU code p
     - Replacing in-text citations with a `[cite]` placeholder.
     - Filtering out author info, affiliations, bibliographies, footnotes, figures, and irrelevant tables.
     - Skipping existing files and handling/deleting corrupt or empty files.
-  - `data_extractor.py`: scans the text files in `dataset/arxiv_texts/`. It cleans typographic ligatures (such as "ﬀ" to "ff", "ﬁ" to "fi", etc.) using `LIGATURE_AND_UNICODE_DICTIONARY`, counts characters across lines for all sources, and estimates total tokens (`main()`) at 4 characters per token to pass back to `architecture.py`. The 4 characters per token figure is a rough guess. Now that the tokenizer can encode text, it can be replaced by a measured figure (see "To do (data)" below). PDF input and standard english data download  was removed; all text now comes from the ar5iv HTML download.
-    - The `\beta` entry in the `\mathrm|\mathit|...` math regex looks like a leftover; check that it does not eat real `\beta` symbols.
+  - `data_extractor.py`: scans the text files in `dataset/arxiv_texts/`, cleans typographic ligatures using `LIGATURE_AND_UNICODE_DICTIONARY`, counts characters across lines, and estimates total tokens (`main()`) as characters divided by 3.61, converted to an integer, to pass back to `architecture.py`.
+    - Where 3.61 comes from: the "first 10 papers" check of the tokenizer (487,146 bytes into 135,092 tokens, with the current merges). It is a *bytes* per token figure from 10 papers that the tokenizer was trained on, while the extractor counts *characters*. The text is mostly ASCII, so characters per token is probably only a percent or two lower. A lower figure means more tokens, so the estimate leans conservative. The old guess of 4 characters per token also under-counted tokens not the other way round.
+    - PDF input and the separate English-text download were removed; all text comes from the ar5iv HTML download.
+  - **Known bugs in the math cleaning (`clean_math_output`), not fixed yet:**
+    - The `\beta` entry in the `\mathrm|\mathit|...` regex is a leftover: `\beta` is a real symbol, not a font command, and must be removed from that list.
+    - The font-command pattern stops at the first `}`, so nested braces break it: `\mathbf{W_{1}}` becomes `W_{1` plus a stray `}`. Fix by removing the command, its opening brace and only the matching closing brace (counting braces), and test with `\mathbf{W_{1}}`, `\mathrm{d}^{2}`, `\mathbf{\mathrm{x}}`, `\beta{x}` and an unclosed `\mathbf{W`. Check that braces stay balanced.
+    - Removing all whitespace inside math glues a command to the next token (`\sum i` becomes `\sumi`), which changes its meaning. A space after a backslash-command followed by a letter must be kept.
+    - After fixing these, the existing papers must be re-downloaded (or re-cleaned), and the tokenizer retrained.
   - To do (arXiv):
-    - Check why some papers (for example Adam, 1412.6980) appear to convert only partially, and add a check for partial pages.
-  - To do (data): collect much more on-topic neural-network text, because on-topic text is only a small share of the current mix and, once the benchmark is fixed, the data limit is likely to be the binding one. Cleaned arXiv papers are much shorter than raw PDFs, so the number of papers needed is likely higher than first estimated; measure tokens per usable paper on a sample. Also replace the 4-characters-per-token guess with a measured number: encode a sample with the real tokenizer and divide characters by tokens.
+    - Check why some papers (for example Adam, 1412.6980) appear to convert only partially, and add a check for partial pages (for example a minimum cleaned size per paper).
+    - In the query string, `stat.ML` has no `cat:` prefix, unlike the other two categories, so arXiv may treat it as a plain text term instead of a category filter. Check this before a bulk download.
+    - Make reruns cheap. Right now `list(client.results(...))` fetches the whole result list before the loop, and "N papers" means the top N results, so asking for 1,000 when 600 exist re-lists 1,000 to find 400. Planned change: iterate the results lazily, treat the user's number as "N *new* papers" (count only successful saves, skip existing files without counting them), and use a separate, larger limit as a safety cap on how far to look. Test by asking for 5 new papers when most top results already exist: exactly 5 new files must appear.
+    - Record the paper count and the average cleaned size per paper.
+  - To do (data): collect much more on-topic neural-network text. Plan:
+    1. Decide a target size. Working backwards from the Chinchilla rule, tokens = 5 x parameters (4 epochs, 20 tokens per parameter), so about 100M tokens (roughly 360 MB of text) supports about 20M parameters. The current 12.3M tokens is about 8 times too few for that.
+    2. Run a batch of a few hundred papers first, and measure the average cleaned size per paper and the failure rate, then plan the full download from those two numbers.
+    3. Check the time limit too: a 24-hour run supports roughly 44M parameters at the current benchmark and placeholder factor, so data beyond that has no use yet.
+    4. Settle the licensing question before the bulk download (see `docs/decisions.md`): the dataset stays out of the repository, and the question of whether the trained model will be shared needs an answer.
+    5. Add a second source type only if arXiv runs short (textbooks, lecture notes, documentation), and keep off-topic text small.
+  - To do (tokens per char): replace the 3.61 estimate with a measured number over the whole corpus, using the final tokenizer (held-out papers if possible). The figure must be recomputed whenever the vocabulary size changes, because a smaller vocabulary compresses less.
 
 - 🔧 **Tokenizer** (`tokenizer_core`, Rust, work in progress): a byte-level BPE tokenizer trained from scratch. `[cite]` and `$` must each stay a single chunk, and whitespace must be preserved exactly.
   - **Token IDs** (`u16`, so up to 65,535): 0-255 are the raw bytes, 256 is `[cite]`, 257 is `<|endoftext|>`, and 258 onward are merged tokens numbered in the order they are learned.
@@ -71,15 +88,43 @@ I do not own a GPU for my primary development environment. The NVIDIA GPU code p
     - Reads `merges.bin` back with `loader()` and rebuilds the full ID-to-bytes vocabulary in memory (`build_vocab()`): 0-255 raw bytes, 256, 257, and every merged token as the bytes of its left part followed by its right part.
     - **Encodes text to IDs** (`encode()`): the text is split into chunks the same way as in training. `[cite]` and `<|endoftext|>` map straight to 256 and 257. Every other chunk starts as its bytes, then merges are applied repeatedly: of all adjacent pairs that have a learned merge, the one with the smallest merged ID (the one learned earliest) is applied everywhere in the chunk, and this repeats until no learned pair is left. Text never seen in training still encodes, because it falls back to raw bytes.
     - **Decodes IDs back to text** (`decode()`): looks up each ID in the vocabulary, joins the bytes, and converts them to a string. An unknown ID returns an error instead of panicking.
-    - **Round-trip smoke test in `main()`:** encodes one sample sentence (containing `[cite]` and `<|endoftext|>`), prints the IDs, decodes them and asserts that the result equals the original. This is a single sentence, not a real test suite (see tests below).
+    - **Round-trip smoke test in `main()`:** encodes one sample sentence (containing `[cite]` and `<|endoftext|>`), prints the IDs, decodes them and asserts that the result equals the original.
+  - **Test results so far** (code and full output in [docs/tokenizer_tests_results.md](docs/tokenizer_tests_results.md), all from the current `merges.bin`, trained on the current corpus):
+    - Lossless round trip on the sample sentence, on edge cases (empty string, whitespace only, glued and malformed special tokens, code indentation, LaTeX and Unicode math, unseen strings), and on 10 whole papers.
+    - Special-token counts match on every test string, and every ID stays below 16,384.
+    - 10 papers: 487,146 bytes into 135,092 tokens, **3.61 bytes per token**. Caveats: those papers were part of the tokenizer's training data, so the figure is optimistic, the 10 files are not a random sample, and there is no baseline yet to say whether 3.61 is good for a 16k vocabulary.
+    - **Determinism confirmed:** two fresh training runs (old `merges.bin` deleted each time) gave byte-identical files (`fc /b`). This was done on the earlier, smaller corpus (17.7 MB); it has not been repeated on the current one.
+    - **Merge frequency curve** (frequency of the winning pair in the current training run):
+
+      | Merge number | Frequency |
+      |---|---|
+      | 500 | 8,539 |
+      | 2,000 | 1,286 |
+      | 4,000 | 419 |
+      | 8,000 | 110 |
+      | 12,000 | 47 |
+      | 14,000 | 34 |
+      | 16,000 and 16,125 (last) | 25 |
+
+      The last merge has frequency 25, so over 4 epochs the rarest tokens are seen about 100 times, which is thin for learning a good embedding. The final merges also tie at 25, so which pairs make it in is decided by the tie rule, not by a clear signal.
+    - **What these tests do not prove:** a round trip passes even if the merges are wrong, because decoding only joins bytes. So they say nothing about whether the incremental pair counts are correct. The committed `main()` is the smoke test only; the larger test variants live in the results file.
   - **Not done yet:**
-    - Nothing encodes the whole dataset into a stored token stream yet; that belongs to the ingestion stage.
-    - `encode()` rebuilds its merge lookup table on every call. This is fine for one sample sentence but must be built once and passed in before encoding a whole corpus.
+    - The incremental pair counts have not been checked against a full recount (see tests to add below).
+    - Nothing encodes the whole dataset into a stored token stream yet; that belongs to the ingestion stage. Doing this also gives the real token count.
+    - `encode()` rebuilds its merge lookup table on every call. This is fine for tests but must be built once and passed in before encoding a whole corpus.
     - `decode()` converts bytes to text leniently (invalid UTF-8 becomes a replacement character instead of an error). This is harmless for a complete sequence, but a cut-off sequence can end in the middle of a multi-byte character.
-    - - The incremental pair counts have not been checked against a full recount (see tokenizer test rules in `docs/`).The incremental pair counts have not been checked against a full recount (see tests below).
     - The input path is relative (`../dataset/arxiv_texts`) and the output goes to the current folder, so for now the program must be run from inside `tokenizer_core`.
-  - **Open decisions:** whether 16,384 is the final vocabulary size (it sets the embedding table size, and with it a share of the parameter budget); whether the metadata lines (`title--`, `arxiv id--`, ...) stay in the training text; and whether a space should attach to the following word (currently spaces are separate chunks).
-  - **Tokenizer test rules:** tokenizer test results are logged in [docs/tokenizer_tests_results.md](docs/tokenizer_tests_results.md). 
+    - The results file has a missing newline in the effectiveness output (two result lines are joined), which should be fixed.
+  - **Tests to add (in this order):**
+    1. Training with incremental updates must give exactly the same merges as a slow version that recounts every pair each iteration, on a small corpus (about 20 lines, 50 merges). Also compare the counts against a full recount every few merges. This is the most important open check.
+    2. For each paper, the number of `[cite]` in the text must equal the number of ID 256 in its encoding (and likewise `<|endoftext|>` and 257).
+    3. `merges.bin` size must be a multiple of 6 and equal 6 x the expected number of merges. `loader()` already asserts the multiple of 6; add the count check.
+    4. Encoding text from the training data must give the segmentation that training produced (the replay order really matches the learned order).
+    5. Measure characters per token on held-out papers, and compare with an existing tokenizer to get a baseline.
+  - **Open decisions:**
+    - **Vocabulary size: 16,384 is probably too large for this data.** The embedding table has (vocabulary size x model width) parameters, and the whole data-limited budget is about 2.5M. For illustration (model width not chosen yet): 16,384 tokens at width 128 is about 2.1M parameters, nearly the entire model; 4,000 tokens at width 128 is about 0.5M. At about 4,000 merges the winning frequency was 419, a healthy level. A range of roughly 4,000 to 8,000 looks more reasonable. Decide after the dataset is final: retrain, print the winning frequency at several points, check what fraction of the budget the embedding takes, and cut where frequency falls below roughly 50 to 100. Because training is deterministic and each merge depends only on the earlier ones, the first N records of `merges.bin` are exactly what an N-merge run would produce, so a smaller vocabulary can be tried by loading only the first N merges (the ID space then ends at 257 + N).
+    - Whether the tokenizer should keep the metadata lines (`title--`, `arxiv id--`, ...) in the training text.
+    - Whether a space should attach to the following word (currently spaces are separate chunks).
 
 - ⏳ Dataset specialization matching: not started.
 - ⏳ Rust ingestion pipeline (batching and streaming; tokenizing builds on `tokenizer_core`): not started.
@@ -141,7 +186,7 @@ python download_arxiv_text.py     # downloads and cleans arXiv papers as text (n
 python architecture.py            # hardware detection, benchmark, token count and sizing
 ```
 
-The tokenizer is still not connected and is run on its own from inside its folder. It reads `../dataset/arxiv_texts` and trains, unless `merges.bin` already exists, in which case it skips training and loads the file. It then rebuilds the vocabulary and runs the round-trip sample test (encode, decode, compare). To retrain, delete `merges.bin` first:
+The tokenizer is still not connected and is run on its own from inside its folder. It reads `../dataset/arxiv_texts` and trains, unless `merges.bin` already exists, in which case it skips training and loads the file. It then rebuilds the vocabulary and runs the round-trip sample test (encode, decode, compare). To retrain, delete `merges.bin` first (otherwise the run only loads the old file and tests nothing new), and do this whenever the dataset changes:
 
 ```bash
 cd tokenizer_core
@@ -154,7 +199,7 @@ cargo run --release
 - Rust toolchain (for `sizer_core` and `tokenizer_core`)
 - For GPU detection: NVIDIA drivers (`nvidia-smi`) or ROCm tooling (`amd-smi` / `rocm-smi` / `rocminfo`), depending on hardware. CPU-only systems fall back automatically.
 - For the intended training setup: a GPU with native bf16 support (NVIDIA Ampere or newer, such as the RTX 3050).
-- Internet access for the download scripts
+- Internet access for the download script
 
 ## Contributing
 
