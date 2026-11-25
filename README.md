@@ -8,7 +8,7 @@ The v1 target is a model hyperspecialized in **neural networks**, built for my o
 
 ## About this project
 
-This is an open-ended personal learning project (roughly a 5-6 month effort, with no fixed deadline). I am learning by building: **the entire codebase is handwritten by me**, piece by piece. AI is used as a tutor for explanations and concepts, not as a source of finished code. Design decisions and dropped ideas, with reasons, are logged in [docs/decisions.md](docs/decisions.md).
+This is an open-ended personal learning project (roughly a 5-6 month effort, with no fixed deadline). I am learning by building: **the entire codebase is handwritten by me**, piece by piece. AI is used as a tutor for explanations and concepts, not as a source of finished code. Design decisions and dropped ideas, with reasons, are logged in [docs/decisions.md](docs/decisions.md). Tokenizer test code and results are in [docs/tokenizer_tests_results.md](docs/tokenizer_tests_results.md).
 
 I do not own a GPU for my primary development environment. The NVIDIA GPU code paths have been successfully verified live, while modern and legacy AMD GPU paths rely on AI-described outputs and community testing. Real training and benchmarking are tested on a laptop with an RTX 3050 (6 GB VRAM).
 
@@ -27,19 +27,19 @@ I do not own a GPU for my primary development environment. The NVIDIA GPU code p
 
 ## Current status
 
-- ✅ **Hardware detection** (`architecture.py`): detects the GPU (name, VRAM in MiB, index), lets the user pick one if several exist, and asks for the training-time budget in hours. Tested on an RTX 3050 laptop GPU; AMD paths are open for community testing.
+- ✅ **Hardware detection** (`architecture.py`): detects the GPU (name, VRAM in MiB, index), lets the user pick one if several exist, and asks for the training-time budget in whole hours. Tested on an RTX 3050 laptop GPU; AMD paths are open for community testing. On a CPU-only machine the script currently stops after printing a notice: benchmarking and sizing are skipped, so there is no CPU sizing path yet. Devices reporting under 1024 MiB of VRAM are ignored to filter out integrated graphics, and vendor CLI queries enforce a 10-second timeout.
 - ✅ **TFLOPS benchmark** (`architecture.py`): 4096x4096 matmul on the selected GPU, in bf16 when natively supported (otherwise fp32, and it says so), after a 12-second thermal warmup. Reports the median of 10 runs. Matches the vendor tool's GPU name to PyTorch's device so the right card is benchmarked. Measured on the RTX 3050: native bf16, median about 8.9 TFLOPS.
-- ✅ **Sizing** (`sizer_core`): Python sends four whole-number or decimal values over stdin (VRAM MiB, hours, TFLOPS, training tokens); Rust prints the smallest limit. The token count must be an integer (a value like `12286188.0` makes the sizer exit with an error). A zero token count is an error. The efficiency factor is a placeholder of 0.3 (realistic range 0.1-0.35; plan to use about 0.2 until measured). With these settings a 24-hour run allows roughly 44M parameters by time (hand calculation; confirm by running the sizer).
+- ✅ **Sizing** (`sizer_core`): Python sends four values over stdin, one per line (VRAM MiB, hours, TFLOPS, training tokens); Rust prints the smallest limit. The token count must be an integer (a value like `12286188.0` makes the sizer exit with an error). A zero token count is an error. The efficiency factor is a placeholder of 0.3 (realistic range 0.1-0.35; plan to use about 0.2 until measured). With these settings a 24-hour run allows roughly 44M parameters by time (hand calculation; confirm by running the sizer).
 - 🔧 **Data** (`download_arxiv_text.py`, `data_extractor.py`):
   - **Current corpus** (re-downloaded in the new format): **12,714,236 estimated tokens** (about 44.5M characters at 3.5 characters per token), which gives a data limit of about **2.5M parameters**. Data is the binding constraint. The paper count is not recorded yet.
   - The downloader fetches the requested number of **new** papers from arXiv (categories `cs.LG`, `cs.NE`, `stat.ML`, neural-network terms, excluding clinical, survey, medical and forecasting), reads them lazily, skips existing files, and uses ar5iv HTML. Output per paper: `[title]`, `[abstract]`, `[body]`, with `[eq]` before display equations, `[proof]` before proofs, `[section]` before top-level section titles, `[cite]` for citations, and math kept as LaTeX in `$...$`. Papers under 500 cleaned characters are skipped. Prose is lowercased and Unicode-normalized; authors, bibliographies, footnotes, figures and equation-free tables are dropped.
   - **Math cleaning:** font commands (`\mathrm`, `\mathbf`, ...) are removed together with their matching brace (found by counting braces, so nesting is safe), and whitespace inside math is removed except after a backslash-command followed by a letter. Not yet checked: `\text{...}` loses its spaces, escaped braces `\{` `\}` are counted as real braces, and the abstract and title are lowercased with raw LaTeX uncleaned. These functions have no tests yet; try `\mathbf{W_{1}}`, `\mathrm{d}^{2}`, `\mathbf{\mathrm{x}}`, `\beta{x}`, `\sum i` and an unclosed `\mathbf{W`, and check that braces stay balanced.
-  - **Token estimate:** `data_extractor.py` divides the character count by 3.5 (from the tokenizer's 10-paper check, which measured bytes per token on papers it was trained on). Units differ (characters, no newlines, versus bytes), so it is approximate; counting file bytes would match better. Recompute the ratio whenever the vocabulary or data changes.
+  - **Token estimate:** `data_extractor.py` divides the character count by 3.5 (from the tokenizer's 10-paper check, which measured bytes per token on papers it was trained on). Units differ (characters, no newlines, versus bytes), so it is approximate; counting file bytes would match better. Recompute the ratio whenever the vocabulary or data changes. Once the tokenizer encodes the whole dataset, its real token count should replace this estimate.
   - **To do:** pick a target size (tokens = 5 x parameters, so about 100M tokens, roughly 350 MB of text, for 20M parameters; a 24-hour run supports about 44M, so more has no use yet); run a few-hundred-paper batch to measure average cleaned size and failure rate, then plan the full download; settle the licensing question before a bulk download (the dataset stays out of the repository); add a stronger partial-conversion check than the 500-character minimum (for example the Adam paper, 1412.6980); print an end-of-run summary and stop after repeated network errors; add a second source (textbooks, lecture notes) only if arXiv runs short.
 - 🔧 **Tokenizer** (`tokenizer_core`, Rust, work in progress): byte-level BPE trained from scratch.
   - **IDs** (`u16`): 0-255 raw bytes; specials `[cite]` 256, `<|endoftext|>` 257, `[title]` 258, `[abstract]` 259, `[body]` 260, `[section]` 261, `[eq]` 262, `[proof]` 263; merges from 264, in the order learned. `NET_MERGES` = 8,952, so the **vocabulary is 9,216**.
   - **Training:** text is split with a regex into specials, `$`, words, whitespace runs and punctuation; merges never cross chunk boundaries. Each distinct chunk is stored once with a count, pair counts are computed once and updated incrementally after each merge, and ties go to the smallest `(left, right)` ID pair, so results do not depend on visiting order. Merges are saved to `merges.bin` (6 bytes each: left, right, new ID, little-endian `u16`; not committed). If `merges.bin` exists, training is skipped and it is loaded.
-  - **Encode/decode:** encode splits the same way, maps specials directly, and replays merges earliest-learned first; unseen text falls back to raw bytes. Decode joins the bytes of each token (unknown ID is an error; invalid UTF-8 becomes a replacement character).
+  - **Encode/decode:** encode splits the same way, maps specials directly, and replays merges earliest-learned first (chunks are encoded in parallel with `rayon`); unseen text falls back to raw bytes. The merge lookup table is built once when the `Tokenizer` is created. Decode joins the bytes of each token (unknown ID is an error; invalid UTF-8 becomes a replacement character).
   - **Results** (with 8,952 merges; details in the results file):
     - Lossless round trip on a sample with all specials, on edge cases (adjacent and malformed tags, empty and whitespace-only strings, nested-brace math, Unicode) and on 10 whole papers. Special-token counts match everywhere and all IDs are in range.
     - Incremental pair updates match a full recount across 40 merges on a toy corpus.
@@ -48,11 +48,11 @@ I do not own a GPU for my primary development environment. The NVIDIA GPU code p
     - Determinism (two fresh runs gave byte-identical `merges.bin`) was confirmed on an earlier corpus and tokenizer version; repeat on the current setup.
     - A round trip passes even if the merges are wrong, so it says nothing about merge correctness. The recount test compares a copy of the merge loop on a toy corpus, not `bpe()` itself.
   - **To do, most important first:**
-    1. **`loader` sanity check.** `merges.bin` has no header, so a file from before a change to the special-token list would load silently and overwrite the specials in `build_vocab`. Check that the first merged ID equals the first free ID (256 + number of specials), IDs are consecutive, both children of each merge are smaller than the new ID, and the merge count is the expected one.
-    2. **One shared special-token table.** The tokens and IDs are written separately in `split_text`, `bpe`, `build_vocab`, `encode`, the tests and the toy corpus, plus a hardcoded 264 and stale comments (some still say 258). Define them once and derive the rest; a missed place causes silent mismatches.
+    1. **`loader` sanity check.** `merges.bin` has no header, so a file from before a change to the special-token list would load silently and overwrite the specials in `build_vocab`. Check that the first merged ID equals the first free ID (256 + number of specials), IDs are consecutive, both children of each merge are smaller than the new ID, and the merge count is the expected one. (The loader already checks that the file size is a multiple of 6.)
+    2. **One shared special-token table.** The tokens and IDs are written separately in `split_text`, `bpe`, `build_vocab`, `encode`, the tests and the toy corpus, plus a hardcoded 264. Define them once and derive the rest; a missed place causes silent mismatches.
     3. Make the recount test call the same merge-step function as `bpe()`, compare full pair-count maps every few steps, and run it once on a real paper sample.
     4. Repeat the determinism check; compare vocabulary sizes by loading the first N merges of the same file (valid because each merge depends only on earlier ones); measure characters per token on held-out papers and against an existing tokenizer.
-    5. Encode the whole dataset into `train.bin` / `val.bin` (this also gives the real token count), after checking that the merge lookup is built once rather than per call.
+    5. Encode the whole dataset into `train.bin` / `val.bin` (this also gives the real token count).
   - **Open decisions:** vocabulary size (9,216 now; the embedding table, vocabulary x model width, takes a large share of a roughly 2.5M-parameter budget: about 1.2M at width 128, 0.6M at width 64, so revisit once the width is chosen); whether a space should attach to the following word (currently separate chunks). Not done: the program uses a relative input path and must run from inside `tokenizer_core`; the committed `main()` is the short smoke test, with the larger suite in the results file.
 - ⏳ Dataset specialization matching, Rust ingestion pipeline, training loop (bf16), inference with KV-cache: not started.
 
@@ -68,17 +68,19 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-`requirements.txt` has `torch`, `arxiv`, `requests` and `beautifulsoup4`. The right PyTorch build depends on your hardware, so use the selector on the PyTorch website if the default `pip install torch` does not match.
+VS Code / Cursor users: A .vscode/settings.json is included in the repository so new integrated terminals automatically activate .venv once created.
 
-## Building the Rust programs 
+`requirements.txt` has `torch`, `arxiv`, `requests` and `beautifulsoup4`. The right PyTorch build depends on your hardware, so use the selector on the PyTorch website if the default `pip install torch` does not match. (architecture.py only imports torch after a dedicated GPU is detected, so hardware scanning works even before PyTorch is installed.)
 
-(requires [Rust](https://www.rust-lang.org/tools/install)); rebuild with `--release` after any Rust change, because `architecture.py` runs the release binary of `sizer_core`:
+## Building the Rust programs
+
+Requires [Rust](https://www.rust-lang.org/tools/install), a recent stable toolchain (the code uses let-chains and `as_chunks`, so roughly 1.88 or newer). Rebuild with `--release` after any Rust change, because `architecture.py` runs the release binary of `sizer_core`:
 
 ```bash
 cd sizer_core
 cargo build --release
 cd ../tokenizer_core
-cargo build --release     # needs the regex and indexmap crates (downloaded on first build)
+cargo build --release     # needs the regex, indexmap and rayon crates (downloaded on first build)
 ```
 
 The `dataset/` folder is not in the repository (it is in `.gitignore`: large files, unchecked copyright). It contains `arxiv_texts/`, created by `download_arxiv_text.py`.
@@ -102,7 +104,7 @@ cargo run --release
 ## Requirements
 
 - Python 3.x and the Rust toolchain
-- GPU detection: NVIDIA drivers (`nvidia-smi`) or ROCm tools (`amd-smi` / `rocm-smi` / `rocminfo`); CPU-only falls back automatically
+- GPU detection: NVIDIA drivers (`nvidia-smi`) or ROCm tools (`amd-smi` / `rocm-smi` / `rocminfo`); without a supported GPU the script reports it and stops before sizing
 - Intended training setup: a GPU with native bf16 (NVIDIA Ampere or newer, such as the RTX 3050)
 - Internet access for the download script
 

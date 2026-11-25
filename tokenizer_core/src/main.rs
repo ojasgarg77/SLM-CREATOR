@@ -1,6 +1,7 @@
 use std::{collections::HashMap, fs::{self, File}, io::{BufWriter,Write}, path::Path, sync::OnceLock};
 use regex::{Regex};
 use indexmap::IndexMap;
+use rayon::prelude::*;
 
 const NET_MERGES:u16=8952;
 //NET_MERGES can never exceed 65,278 because u16 limits us to 65,536 total IDs.
@@ -201,11 +202,10 @@ fn bpe(text: &str){
     //This vector represents the entire text corpus broken down into unique, weighted token sequences.
 
     let mut next_token_id:u16=264;
-    //We chose 258 for new merged tokens as avoids overlapping with any pre existing characters or special tokens.
+    //We chose 264 for new merged tokens as avoids overlapping with any pre existing characters or special tokens.
     //ID(s)-
     //(0-255)->ASCII/UTF-8 characters
-    //256,257->Assigned to [cite] and <|endoftext|>
-    //258-desired number(limit is 65,535)->Assigned to merged tokens.
+    //256 to 263 for special tokens.
 
     let file=File::create("merges.bin")
         .expect("ERROR IN CREATING BINARY FILE.");
@@ -218,7 +218,7 @@ fn bpe(text: &str){
     for iteration in 0.. NET_MERGES{
         
         let best_option_pair: Option<(&(u16, u16), &usize)>=pair_counts.iter().max_by(|a,b|{
-            // The .iter().max_by() part loops through the pair counts, comparing frequencies first, and uses secondary tie-breaking logic if frequencies match.
+            // The .iter().max_by() part loops through the pair counts, comparing frequencies first, and uses secondary tie-breaking logic if frequencies match(picks lexographically smaller tuple).
             //And finds the when in which the count is the highest
 
             let freq=a.1.cmp(b.1);
@@ -230,6 +230,7 @@ fn bpe(text: &str){
             let best_pair=*best_pair;
             let frequency=*frequency;
             pair_counts.swap_remove(&best_pair);
+            //Immediately deletes the pair itself as its frequency has been recorded.
 
             if iteration%500==0 || iteration==NET_MERGES-1{
                 println!("ITERATION--{:2} MERGING PAIR--{:?} (FREQUENCY--{}) INTO TOKEN ID{}\n  |\n  |\n  |",
@@ -347,65 +348,54 @@ impl Tokenizer{
     }
     
     fn encode(&self,text: &str)->Vec<u16>{
-    let clean_text=split_text(text);
-
-    let mut encoded_chunks:Vec<u16>=Vec::new();
-    for chunk in &clean_text{
-        if *chunk=="[cite]"{
-            encoded_chunks.push(256);
-            continue;
-        }
-        if *chunk=="<|endoftext|>"{
-            encoded_chunks.push(257);
-            continue;
-        }
-        if *chunk=="[title]"{
-            encoded_chunks.push(258);
-            continue;
-        }
-        if *chunk=="[abstract]"{
-            encoded_chunks.push(259);
-            continue;
-        }
-        if *chunk=="[body]"{
-            encoded_chunks.push(260);
-            continue;
-        }
-        if *chunk=="[section]"{
-            encoded_chunks.push(261);
-            continue;
-        }
-        if *chunk=="[eq]"{
-            encoded_chunks.push(262);
-            continue;
-        }
-        if *chunk=="[proof]"{
-            encoded_chunks.push(263);
-            continue;
-        }
-        let mut byte_tokens:Vec<u16>=chunk.as_bytes().iter().map(|&b| b as u16).collect();
-        while byte_tokens.len()>=2{
-            let mut best_merge:Option<((u16,u16),u16)>=None;
-            for pair in byte_tokens.windows(2){
-                let p=(pair[0],pair[1]);
-                if let Some(&merged_id)=self.merges.get(&p)
-                    && best_merge.is_none_or(|(_, best_id)|merged_id<best_id){
-                        //best_merge is an option which originally starts as None and after the loop holds our best pair.
-                        //This line handles the cases if best merge is none than it returns true.
-                        //If best merge pair is something else it ignores the pair and runs merged_id<best_id and returns true only if the new pair has a smaller merged_id.
-                        //Signifying it was learned during training.
-                        best_merge=Some((p, merged_id));
-                    }
+        let clean_text=split_text(text);
+        clean_text.par_iter().flat_map(|&chunk|{
+            if chunk=="[cite]"{
+                return vec![256];
             }
-            let Some(((left_id,right_id),merged_id))=best_merge else{
-                break;
-            };
-            byte_tokens=apply_merge(&byte_tokens, (left_id,right_id),merged_id);
-        }
-        encoded_chunks.extend(byte_tokens);
+            if chunk=="<|endoftext|>"{
+                return vec![257];
+            }
+            if chunk=="[title]"{
+                return vec![258];
+            }
+            if chunk=="[abstract]"{
+                return vec![259];
+            }
+            if chunk=="[body]"{
+                return vec![260];
+            }
+            if chunk=="[section]"{
+                return vec![261];
+            }
+            if chunk=="[eq]"{
+                return vec![262];
+            }
+            if chunk=="[proof]"{
+                return vec![263];
+            }
+            let mut byte_tokens:Vec<u16>=chunk.as_bytes().iter().map(|&b| b as u16).collect();
+            while byte_tokens.len()>=2{
+                let mut best_merge:Option<((u16,u16),u16)>=None;
+                for pair in byte_tokens.windows(2){
+                    let p=(pair[0],pair[1]);
+                    if let Some(&merged_id)=self.merges.get(&p)
+                        && best_merge.is_none_or(|(_, best_id)|merged_id<best_id){
+                            //best_merge is an option which originally starts as None and after the loop holds our best pair.
+                            //This line handles the cases if best merge is none than it returns true.
+                            //If best merge pair is something else it ignores the pair and runs merged_id<best_id and returns true only if the new pair has a smaller merged_id.
+                            //Signifying it was learned during training.
+                            best_merge=Some((p, merged_id));
+                        }
+                }
+                let Some(((left_id,right_id),merged_id))=best_merge else{
+                    break;
+                };
+                byte_tokens=apply_merge(&byte_tokens, (left_id,right_id),merged_id);
+            }
+            byte_tokens
+        }).collect()
     }
-    encoded_chunks
-}
 
     fn decode(&self,ids:&[u16])->Result<String,String>{
         let mut bytes:Vec<u8>=Vec::with_capacity(ids.len()*4);

@@ -10,7 +10,6 @@ import statistics
 import inspect
 
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-import torch
 
 print("HARDWARE ARCHITECTURE CHECKER AND ANALYZER\n")
 
@@ -127,8 +126,11 @@ def scan_hardware():
         "stdout":subprocess.PIPE,
         "stderr":subprocess.DEVNULL,
         "text":True,
-        "encoding":"utf-8"
+        "encoding":"utf-8",
+        "timeout":10
     }
+    if sys.platform=="win32":
+        run_settings["creationflags"]=subprocess.CREATE_NO_WINDOW
 
     nvidia_bin=shutil.which("nvidia-smi")
     if not nvidia_bin:
@@ -146,7 +148,7 @@ def scan_hardware():
                 vram=int(gpu_conditions[1])
                 print(f"GPU is {gpu}.The VRAM is {vram}")
                 targeted_gpus.append(("cuda",vram,idx,gpu.strip()))
-        except subprocess.SubprocessError:
+        except (subprocess.SubprocessError,OSError):
             pass
     if shutil.which("amd-smi"):
         try:
@@ -156,14 +158,21 @@ def scan_hardware():
             devices=output_amd.get("devices",[])
             for idx,device in enumerate(devices):
                 gpu_amd=device["asic"]["market_name"]
-                vram_amd=int(device["vram"]["total"])
+                vram_amd=str(device["vram"]["total"])
+
+                if not vram_amd.isdigit():
+                    continue
+                vram_amd=int(vram_amd)
+
                 if int(vram_amd)>1_000_000:
                     vram_mib=vram_amd//(1024*1024)
                 else:
                     vram_mib=vram_amd
+                if vram_mib<1024:
+                    continue
                 print(f"GPU is {gpu_amd}.The VRAM is {vram_mib}")
                 targeted_gpus.append(("modern-rocm", vram_mib, idx, gpu_amd.strip()))
-        except(subprocess.SubprocessError,KeyError,json.JSONDecodeError):
+        except(subprocess.SubprocessError,KeyError,json.JSONDecodeError,OSError):
             pass   
     elif shutil.which("rocm-smi") or shutil.which("rocminfo"):
         try:
@@ -180,10 +189,12 @@ def scan_hardware():
                         vram_legacy_mib=vram_amd_legacy//(1024*1024)
                     else:
                         vram_legacy_mib=vram_amd_legacy
+                    if vram_legacy_mib<1024:
+                        continue
                     print(f"GPU is {gpu_amd_legacy}.The VRAM is {vram_legacy_mib}")
                     targeted_gpus.append(("legacy-rocm", vram_legacy_mib, idx, gpu_amd_legacy.strip()))
             print("ROCm ARCHITECTURE DETECTED.")
-        except (subprocess.SubprocessError,json.JSONDecodeError):
+        except (subprocess.SubprocessError,OSError,json.JSONDecodeError):
             pass    
 
     if len(targeted_gpus)==0:
@@ -203,7 +214,6 @@ def scan_hardware():
             except ValueError:
                 print("PLEASE ENTER A VALID NUMBER.")
 detected_hardware=scan_hardware()
-allocated_time=ask_training_time()
 
 def identify_os():
     base_path=os.path.join("sizer_core", "target", "release", "sizer_core")
@@ -220,6 +230,12 @@ def dataset_tokens():
 if detected_hardware[0]=="cpu":
     print("NO DEDICATED AI-GPU DRIVERS DETECTED.")
 else:
+    try:
+        import torch
+    except ImportError:
+        print("GPU DETECTED,BUT PYTORCH IS NOT INSTALLED.PLEASE INSTALL PYTORCH WITH CUDA/ROCm SUPPORT.")
+        sys.exit(1)
+    allocated_time=ask_training_time()
     tflops_computed=compute_TFLOPS(detected_hardware[0],
         gpu_index=int(detected_hardware[2]),
         expected_name=detected_hardware[3]
@@ -239,7 +255,9 @@ else:
             break
         except FileNotFoundError:
             print("\nENSURE THAT U HAVE FOLLOWED ALL INSTRUCTIONS, HAVE RUST INSTALLED AND (sizer_core) SET UP AND DATASET SET UP.")
-            input("AFTER COMPLETING PRESS ENTER:")
+            choice=input("AFTER COMPLETING PRESS ENTER: (OR TYPE q to quit)").strip().lower()
+            if choice=="q":
+                break
         except subprocess.CalledProcessError as eprintln_error:
             print("EXIT CODE", eprintln_error.returncode)
             print("RUST SIDE ERROR", eprintln_error.stderr)
