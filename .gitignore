@@ -10,3 +10,5 @@ __pycache__/
 dataset/
 tests.py
 tokenizer_core/merges.bin
+tokenizer_core/train.bin
+tokenizer_core/val.bin
