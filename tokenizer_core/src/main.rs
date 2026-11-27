@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs::{self, File}, io::{BufWriter,Write}, path::Path, sync::OnceLock};
+use std::{collections::HashMap, fs::{self, File}, io::{BufWriter,Write}, path::{Path, PathBuf}, sync::OnceLock};
 use regex::{Regex};
 use indexmap::IndexMap;
 use rayon::prelude::*;
@@ -6,6 +6,23 @@ use rayon::prelude::*;
 const NET_MERGES:u16=8952;
 //NET_MERGES can never exceed 65,278 because u16 limits us to 65,536 total IDs.
 
+const SPECIAL_TOKENS: &[&str]=&[
+    "[cite]",         
+    "<|endoftext|>",  
+    "[title]",        
+    "[abstract]",     
+    "[body]",         
+    "[section]",      
+    "[eq]",           
+    "[proof]",        
+];
+
+fn get_special_id(token: &str)->Option<u16>{
+    SPECIAL_TOKENS
+        .iter()
+        .position(|&t|t==token)
+        .map(|idx|256+idx as u16)
+}
 
 fn main(){
     if !Path::new("merges.bin").exists(){
@@ -16,23 +33,26 @@ fn main(){
         println!("FOUND EXISTING merges.bin. SKIPPING BPE TRAINING.\n");
     }
 
-    let merges = loader("merges.bin");
+    let merges=loader("merges.bin");
     println!("LOADED {} MERGE RULES.", merges.len());
 
-    let tokenizer = Tokenizer::new(&merges);
+    let tokenizer=Tokenizer::new(&merges);
 
+    if !Path::new("train.bin").exists() || !Path::new("val.bin").exists(){
+        println!("GENERATING TRAIN AND VAL BINARY FILES....\n");
+        let (dataset_contents,test_contents)=create_dataset();
 
-    println!("STARTING SAMPLE TESTS\n");
-    let sample="Neural networks learned through [cite] backpropagation [cite] <|endoftext|>";
-    let ids=tokenizer.encode(sample);
-    println!("SAMPLE: {:?}",sample);
-    println!("TOKEN IDS({} tokens):{:?}",ids.len(),ids);
+        let train_ids=tokenizer.encode(&dataset_contents);
+        println!("TRAIN TOKENS:{}",train_ids.len());
+        write_tokens("train.bin",&train_ids);
 
-    let decoded=tokenizer.decode(&ids).unwrap();
-    println!("DECODED: {:?}",decoded);
-    assert_eq!(sample, decoded);
+        let test_ids = tokenizer.encode(&test_contents);
+        println!("TEST TOKENS:{}",test_ids.len());
+        write_tokens("val.bin",&test_ids);
+    }else{
+        println!("FOUND EXISTING train.bin AND val.bin. SKIPPING DATASET ENCODING.\n");
+    }
 }
-
 
 fn read_files()->String{
     let folder_location="../dataset/arxiv_texts";
@@ -42,11 +62,15 @@ fn read_files()->String{
         .expect("ERROR IN READING DIRECTORY FILES.");
 
     for entry in entries.flatten(){
+    //Here .flatten() unwraps the successful directory entries and silently skips any entries that failed to read.
         let path=entry.path();
 
         if path.is_file() && path.extension().and_then(|s| s.to_str())==Some("txt"){
+        //Ensures that path points to the file and then path.extension() extracts file extraction and outputs a Option<&OsStr>.
+        //.and_then(|s| s.to_str()) converts that into Option<&str>. Only when a file has both a valid extension and utf8 in it, it will become utf-8.
             let contents=fs::read_to_string(&path)
             .unwrap_or_else(|_| panic!("FAILED TO READ FILES{:?}",path));
+            //Here _ in | | is just an empty variable used to capture any error if one were to occour.
             all_contents.push_str(&contents);
             all_contents.push_str("<|endoftext|>\n\n\n");
         }
@@ -84,9 +108,14 @@ fn adjust_pairs(pair_count:&mut IndexMap<(u16,u16),usize>,pair:(u16,u16),delta:i
     //When frequency of a token hits zero, completely removes the pair from the map to optimize memory and lookups.
     //This signifacantly fastens our bpe.
     if delta>0{
-        *pair_count.entry(pair).or_insert(0)+=delta as usize;
+        *pair_count
+            .entry(pair)
+            .or_insert(0)+=delta as usize;
+
     }else if delta<0 && let Some(c)=pair_count.get_mut(&pair){
             *c=c.saturating_sub((-delta) as usize);
+            //This is defensive coding to capture edge cases like (a,a,a).
+
             if *c==0{
                 pair_count.swap_remove(&pair);
             }    
@@ -94,11 +123,11 @@ fn adjust_pairs(pair_count:&mut IndexMap<(u16,u16),usize>,pair:(u16,u16),delta:i
 }
 
 fn split_text(text: &str)->Vec<&str>{
-    // 'a is a rust lifetime label which gurantess that the string slices &str can never outlive orignal text.
-    //This approach prevents rust from dangling pointers without sacrificing any runtime cost.
 
     static SPECIAL_REGEX:OnceLock<Regex>=OnceLock::new();
     static CLEAN_TEXT_REGEX:OnceLock<Regex>=OnceLock::new();
+    //static tells the OS to store the regex pattern in the RAM until the entire program exists.
+    //OnceLock allows only one thread of the CPU to write into the RAM the very first time and then lock it forever there.
 
     let special_regex=SPECIAL_REGEX.get_or_init(|| 
         {Regex::new(r"<\|endoftext\|>|\[cite\]|\[title\]|\[abstract\]|\[body\]|\[section\]|\[eq\]|\[proof\]").unwrap()
@@ -107,9 +136,9 @@ fn split_text(text: &str)->Vec<&str>{
         {Regex::new(r"<\|endoftext\|>|\[cite\]|\[title\]|\[abstract\]|\[body\]|\[section\]|\[eq\]|\[proof\]|\$| ?\p{L}+| ?\p{N}+|[^\s\p{L}\p{N}$]+|\s+").unwrap()
     });
     //These 2 specific line is the heart of the entire code. it tells the computer whr to chop the string into smaller units.
-    //Because we needs to preserve $ and [cite] and hence they are given the priority and the code splits them first.
     //It is important to note that i did consider fancy-regex over normal regex as used in tiktoken to account for backtracking of tokens but considering the effeciency trade-off i went with standard regex.
     //As with standard regex we unlock Rust's Deterministic Finite Automaton (DFA) regex engine which processes text in strict, guaranteed O(n) linear time using SIMD making it significantly faster than fancy-regex. 
+    //Also the test results have proven the current approach working as it is meant to be.
 
     let mut clean_text: Vec<&str>=Vec::new();
     let mut last_idx=0;
@@ -166,23 +195,8 @@ fn bpe(text: &str){
     //This helps us sandbox everything in its private sandbox. 
 
     for chunk in &clean_text{
-        let byte_tokens:Vec<u16>=if *chunk=="[cite]"{
-            vec![256]
-            //This line assigns the [cite] chunk the token number 256.
-        }else if *chunk=="<|endoftext|>"{
-            vec![257]
-        }else if *chunk=="[title]"{
-            vec![258]
-        }else if *chunk=="[abstract]"{
-            vec![259]
-        }else if *chunk=="[body]"{
-            vec![260]
-        }else if *chunk=="[section]"{
-            vec![261]
-        }else if *chunk=="[eq]"{
-            vec![262]
-        }else if *chunk=="[proof]"{
-            vec![263]
+        let byte_tokens:Vec<u16>=if let Some(special_id)=get_special_id(chunk){
+            vec![special_id]
         }else{
             chunk.as_bytes().iter().map(|&b| b as u16).collect()
             //The function .as_bytes() performs an O(1) operation and treats string silence directly in u8 bytes
@@ -201,7 +215,7 @@ fn bpe(text: &str){
     //I then converts that hash map into a vector of tuples (Vec<u16>, usize). 
     //This vector represents the entire text corpus broken down into unique, weighted token sequences.
 
-    let mut next_token_id:u16=264;
+    let mut next_token_id:u16=256+SPECIAL_TOKENS.len() as u16;
     //We chose 264 for new merged tokens as avoids overlapping with any pre existing characters or special tokens.
     //ID(s)-
     //(0-255)->ASCII/UTF-8 characters
@@ -232,7 +246,7 @@ fn bpe(text: &str){
             pair_counts.swap_remove(&best_pair);
             //Immediately deletes the pair itself as its frequency has been recorded.
 
-            if iteration%500==0 || iteration==NET_MERGES-1{
+            if iteration%400==0 || iteration==NET_MERGES-1{
                 println!("ITERATION--{:2} MERGING PAIR--{:?} (FREQUENCY--{}) INTO TOKEN ID{}\n  |\n  |\n  |",
                 iteration,best_pair,frequency,next_token_id);
             }
@@ -291,7 +305,8 @@ fn loader(file_path:&str)->Vec<((u16,u16),u16)> {
         "CORRUPTED BINARY FILE. FLIE SIZE({} BYTES) ISNT A MULTIPLE OF 6",
         net_bytes.len()
     );
-    let mut merges=Vec::new();
+    let mut expected_id = 256 + SPECIAL_TOKENS.len() as u16;
+    let mut merges=Vec::with_capacity(NET_MERGES as usize);
     //This vector represents the entire history of all the iterations.
 
     for chunk in net_bytes.as_chunks::<6>().0{
@@ -304,7 +319,9 @@ fn loader(file_path:&str)->Vec<((u16,u16),u16)> {
         let merged_id=u16::from_le_bytes(chunk[4..6].try_into().unwrap());
         //Grabs the last 2 chunks.
 
+        assert!(merged_id==expected_id && left<merged_id && right<merged_id,"CORRUPTED MERGED RULES.");
         merges.push(((left,right),merged_id));
+        expected_id+=1;
     }
     merges
 }
@@ -315,14 +332,10 @@ fn build_vocab(merges:&[((u16,u16),u16)])->HashMap<u16,Vec<u8>>{
         vocab.insert(i,vec![i as u8]);
         //To map token IDs back to human readable bytes, the vocab stores a Vec<u8> for every single token id.
     }
-    vocab.insert(256,b"[cite]".to_vec());
-    vocab.insert(257,b"<|endoftext|>".to_vec());
-    vocab.insert(258,b"[title]".to_vec());
-    vocab.insert(259,b"[abstract]".to_vec());
-    vocab.insert(260,b"[body]".to_vec());
-    vocab.insert(261,b"[section]".to_vec());
-    vocab.insert(262,b"[eq]".to_vec());
-    vocab.insert(263,b"[proof]".to_vec());
+
+    for (idx, &token) in SPECIAL_TOKENS.iter().enumerate(){
+        vocab.insert(256+idx as u16, token.as_bytes().to_vec());
+    }    
     
     for &((left,right),merged_id) in merges{
         let mut combined=vocab[&left].clone();
@@ -350,29 +363,8 @@ impl Tokenizer{
     fn encode(&self,text: &str)->Vec<u16>{
         let clean_text=split_text(text);
         clean_text.par_iter().flat_map(|&chunk|{
-            if chunk=="[cite]"{
-                return vec![256];
-            }
-            if chunk=="<|endoftext|>"{
-                return vec![257];
-            }
-            if chunk=="[title]"{
-                return vec![258];
-            }
-            if chunk=="[abstract]"{
-                return vec![259];
-            }
-            if chunk=="[body]"{
-                return vec![260];
-            }
-            if chunk=="[section]"{
-                return vec![261];
-            }
-            if chunk=="[eq]"{
-                return vec![262];
-            }
-            if chunk=="[proof]"{
-                return vec![263];
+            if let Some(special_id)=get_special_id(chunk){
+                return vec![special_id];
             }
             let mut byte_tokens:Vec<u16>=chunk.as_bytes().iter().map(|&b| b as u16).collect();
             while byte_tokens.len()>=2{
@@ -410,4 +402,61 @@ impl Tokenizer{
         Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+}
+
+
+fn create_dataset()->(String,String){
+    let folder_location="../dataset/arxiv_texts";
+    let mut sort_vector:Vec<PathBuf>=Vec::new();
+    let mut dataset_contents=String::new();
+    let mut test_contents=String::new();
+
+    let entries: fs::ReadDir=fs::read_dir(folder_location)
+        .expect("ERROR IN READING DIRECTORY FILES.");
+
+    for entry in entries.flatten(){
+    //Here .flatten() unwraps the successful directory entries and silently skips any entries that failed to read.
+        let path=entry.path();
+        if path.is_file() && path.extension().and_then(|s| s.to_str())==Some("txt"){
+        //Ensures that path points to the file and then path.extension() extracts file extraction and outputs a Option<&OsStr>.
+        //.and_then(|s| s.to_str()) converts that into Option<&str>. Only when a file has both a valid extension and utf8 in it, it will become utf-8.
+        sort_vector.push(path);
+        }
+    }
+    sort_vector.sort();
+    let file_num=sort_vector.len();
+
+    let files_for_training=(file_num as f64*0.95).round() as usize;
+    for path in sort_vector.iter().take(files_for_training){
+        let contents=fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("FAILED TO READ FILES{:?}",path));
+
+        dataset_contents.push_str(&contents);
+        dataset_contents.push_str("<|endoftext|>\n\n\n");
+        }
+
+    for path in sort_vector.iter().skip(files_for_training){
+        let contents=fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("FAILED TO READ FILES{:?}",path));
+
+        test_contents.push_str(&contents);
+        test_contents.push_str("<|endoftext|>\n\n\n");
+        }
+    (dataset_contents,test_contents)
+}
+
+fn write_tokens(file_name: &str, ids: &[u16]){
+    let file=File::create(file_name)
+        .expect("ERROR IN CREATING BINARY FILE.");
+
+    let mut writer=BufWriter::new(file);
+
+    for id in ids{
+        writer.write_all(&id.to_le_bytes())
+            .expect("FAILED TO WRITE TOKEN BYTE.");
+    }
+
+    writer.flush()
+        .expect("FAILED TO FLUSH DATA TO SSD.");
+    println!("\nSUCCESS: 2 BYTE TOKEN IDS ARE WRITTEN IN THE BINARY FILE COMPLETELY.\n");
 }
